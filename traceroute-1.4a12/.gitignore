@@ -1,7 +1,0 @@
-Makefile
-config.cache
-config.log
-config.status
-gnuc.h
-*.o
-traceroute
