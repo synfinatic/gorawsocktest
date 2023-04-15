@@ -277,7 +277,6 @@ int packlen;			/* total length of packet */
 int minpacket;			/* min ip packet size */
 int maxpacket = 32 * 1024;	/* max ip packet size */
 int pmtu;			/* Path MTU Discovery (RFC1191) */
-u_int pausemsecs;
 
 char *prog;
 char *source;
@@ -285,7 +284,6 @@ char *hostname;
 char *device;
 static const char devnull[] = "/dev/null";
 
-int nprobes = 3;
 int max_ttl = 30;
 int first_ttl = 1;
 u_short ident;
@@ -293,9 +291,7 @@ u_short port = 32768 + 666;	/* start udp dest port # for probe packets */
 
 int options;			/* socket options */
 int verbose;
-int waittime = 5;		/* time to wait for response (in seconds) */
 int nflag;			/* print addresses numerically */
-int useicmp;			/* use icmp echo instead of udp packets */
 #ifdef CANT_HACK_IPCKSUM
 int doipcksum = 0;		/* don't calculate ip checksums by default */
 #else
@@ -309,17 +305,11 @@ extern char *optarg;
 
 /* Forwards */
 void	freehostinfo(struct hostinfo *);
-void	getaddr(u_int32_t *, char *);
 struct	hostinfo *gethostinfo(char *);
 u_short	in_cksum(u_short *, int);
-char	*inetname(struct in_addr);
 int	main(int, char **);
-int	packet_ok(u_char *, int, struct sockaddr_in *, int);
-char	*pr_type(u_char);
-void	print(u_char *, int, struct sockaddr_in *);
 void	send_probe(int, int, struct timeval *);
 int	str2val(const char *, const char *, int, int);
-void	tvsub(struct timeval *, struct timeval *);
 __dead	void usage(void);
 #ifndef HAVE_USLEEP
 int	usleep(u_int);
@@ -340,7 +330,6 @@ main(int argc, char **argv)
 	register struct protoent *pe;
 	register int ttl, probe, i;
 	register int seq = 0;
-	int tos = 0, settos = 0;
 	register int lsrr = 0;
 	register u_short off = 0;
 	struct ifaddrlist *al;
@@ -354,7 +343,7 @@ main(int argc, char **argv)
 		prog = argv[0];
 
 	opterr = 0;
-	while ((op = getopt(argc, argv, "dFInrvxf:i:m:p:q:s:t:w:z:")) != EOF)
+	while ((op = getopt(argc, argv, "dFnrvxf:i:m:p:s:")) != EOF)
 		switch (op) {
 
 		case 'd':
@@ -373,10 +362,6 @@ main(int argc, char **argv)
 			device = optarg;
 			break;
 
-		case 'I':
-			++useicmp;
-			break;
-
 		case 'm':
 			max_ttl = str2val(optarg, "max ttl", 1, 255);
 			break;
@@ -388,10 +373,6 @@ main(int argc, char **argv)
 		case 'p':
 			port = (u_short)str2val(optarg, "port",
 			    1, (1 << 16) - 1);
-			break;
-
-		case 'q':
-			nprobes = str2val(optarg, "nprobes", 1, -1);
 			break;
 
 		case 'r':
@@ -406,27 +387,12 @@ main(int argc, char **argv)
 			source = optarg;
 			break;
 
-		case 't':
-			tos = str2val(optarg, "tos", 0, 255);
-			++settos;
-			break;
-
 		case 'v':
 			++verbose;
 			break;
 
 		case 'x':
 			doipcksum = (doipcksum == 0);
-			break;
-
-		case 'w':
-			waittime = str2val(optarg, "wait time",
-			    2, 24 * 60 * 60);
-			break;
-
-		case 'z':
-			pausemsecs = str2val(optarg, "pause msecs",
-			    0, 60 * 60 * 1000);
 			break;
 
 		default:
@@ -444,10 +410,7 @@ main(int argc, char **argv)
 		Fprintf(stderr, "%s: Warning: ip checksums disabled\n", prog);
 
 	minpacket = sizeof(*outip) + sizeof(*outdata) + optlen;
-	if (useicmp)
-		minpacket += 8;			/* XXX magic number */
-	else
-		minpacket += sizeof(*outudp);
+	minpacket += sizeof(*outudp);
 	packlen = minpacket;			/* minimum sized packet */
 
 	/* Process destination and optional packet size */
@@ -489,8 +452,6 @@ main(int argc, char **argv)
 	memset((char *)outip, 0, packlen);
 
 	outip->ip_v = IPVERSION;
-	if (settos)
-		outip->ip_tos = tos;
 #ifdef BYTESWAP_IP_HDR
 	Fprintf(stderr, "we are swapping IP_HDR len/offset\n");
 	outip->ip_len = htons(packlen);
@@ -559,15 +520,6 @@ main(int argc, char **argv)
 		Fprintf(stderr, "%s: IP_HDRINCL: %s\n", prog, strerror(errno));
 		exit(1);
 	}
-#else
-#ifdef IP_TOS
-	if (settos && setsockopt(sndsock, IPPROTO_IP, IP_TOS,
-	    (char *)&tos, sizeof(tos)) < 0) {
-		Fprintf(stderr, "%s: setsockopt tos %d: %s\n",
-		    prog, tos, strerror(errno));
-		exit(1);
-	}
-#endif
 #endif
 	if (options & SO_DEBUG)
 		(void)setsockopt(sndsock, SOL_SOCKET, SO_DEBUG, (char *)&on,
@@ -671,15 +623,12 @@ main(int argc, char **argv)
 		int unreachable = 0;
 		int sentfirst = 0;
 
-		Printf("%2d ", ttl);
-		for (probe = 0; probe < nprobes; ++probe) {
+		for (probe = 0; probe < 3; ++probe) {
 			register int cc;
 			struct timeval t1, t2;
 			struct timezone tz;
 			register struct ip *ip;
 
-			if (sentfirst && pausemsecs > 0)
-				usleep(pausemsecs * 1000);
 			(void)gettimeofday(&t1, &tz);
 			send_probe(++seq, ttl, &t1);
 			++sentfirst;
@@ -725,19 +674,9 @@ send_probe(register int seq, int ttl, register struct timeval *tp)
 	outdata->ttl = ttl;
 	outdata->tv = *tp;
 
-	if (useicmp)
-		outicmp->icmp_seq = htons(seq);
-	else
-		outudp->uh_dport = htons(port + seq);
+	outudp->uh_dport = htons(port + seq);
 
-	if (useicmp) {
-		/* Always calculate checksum for icmp packets */
-		outicmp->icmp_cksum = 0;
-		outicmp->icmp_cksum = in_cksum((u_short *)outicmp,
-		    packlen - (sizeof(*outip) + optlen));
-		if (outicmp->icmp_cksum == 0)
-			outicmp->icmp_cksum = 0xffff;
-	} else if (doipcksum) {
+	if (doipcksum) {
 		/* Checksum (we must save and restore ip header) */
 		tip = *outip;
 		ui = (struct udpiphdr *)outip;
@@ -786,15 +725,7 @@ send_probe(register int seq, int ttl, register struct timeval *tp)
 	}
 #endif
 
-#ifdef __hpux
-	cc = sendto(sndsock, useicmp ? (char *)outicmp : (char *)outudp,
-	    packlen - (sizeof(*outip) + optlen), 0, &whereto, sizeof(whereto));
-	if (cc > 0)
-		cc += sizeof(*outip) + optlen;
-#else
-	cc = sendto(sndsock, (char *)outip,
-	    packlen, 0, &whereto, sizeof(whereto));
-#endif
+	cc = sendto(sndsock, (char *)outip, packlen, 0, &whereto, sizeof(whereto));
 	if (cc < 0 || cc != packlen)  {
 		if (cc < 0)
 			Fprintf(stderr, "%s: sendto: %s\n",
@@ -805,128 +736,6 @@ send_probe(register int seq, int ttl, register struct timeval *tp)
 	}
 }
 
-/*
- * Convert an ICMP "type" field to a printable string.
- */
-char *
-pr_type(register u_char t)
-{
-	static char *ttab[] = {
-	"Echo Reply",	"ICMP 1",	"ICMP 2",	"Dest Unreachable",
-	"Source Quench", "Redirect",	"ICMP 6",	"ICMP 7",
-	"Echo",		"ICMP 9",	"ICMP 10",	"Time Exceeded",
-	"Param Problem", "Timestamp",	"Timestamp Reply", "Info Request",
-	"Info Reply"
-	};
-
-	if (t > 16)
-		return("OUT-OF-RANGE");
-
-	return(ttab[t]);
-}
-
-int
-packet_ok(register u_char *buf, int cc, register struct sockaddr_in *from,
-    register int seq)
-{
-	register struct icmp *icp;
-	register u_char type, code;
-	register int hlen;
-#ifndef ARCHAIC
-	register struct ip *ip;
-
-	ip = (struct ip *) buf;
-	hlen = ip->ip_hl << 2;
-	if (cc < hlen + ICMP_MINLEN) {
-		if (verbose)
-			Printf("packet too short (%d bytes) from %s\n", cc,
-				inet_ntoa(from->sin_addr));
-		return (0);
-	}
-	cc -= hlen;
-	icp = (struct icmp *)(buf + hlen);
-#else
-	icp = (struct icmp *)buf;
-#endif
-	type = icp->icmp_type;
-	code = icp->icmp_code;
-	/* Path MTU Discovery (RFC1191) */
-	if (code != ICMP_UNREACH_NEEDFRAG)
-		pmtu = 0;
-	else {
-#ifdef HAVE_ICMP_NEXTMTU
-		pmtu = ntohs(icp->icmp_nextmtu);
-#else
-		pmtu = ntohs(((struct my_pmtu *)&icp->icmp_void)->ipm_nextmtu);
-#endif
-	}
-	if ((type == ICMP_TIMXCEED && code == ICMP_TIMXCEED_INTRANS) ||
-	    type == ICMP_UNREACH || type == ICMP_ECHOREPLY) {
-		register struct ip *hip;
-		register struct udphdr *up;
-		register struct icmp *hicmp;
-
-		hip = &icp->icmp_ip;
-		hlen = hip->ip_hl << 2;
-		if (useicmp) {
-			/* XXX */
-			if (type == ICMP_ECHOREPLY &&
-			    icp->icmp_id == htons(ident) &&
-			    icp->icmp_seq == htons(seq))
-				return (-2);
-
-			hicmp = (struct icmp *)((u_char *)hip + hlen);
-			/* XXX 8 is a magic number */
-			if (hlen + 8 <= cc &&
-			    hip->ip_p == IPPROTO_ICMP &&
-			    hicmp->icmp_id == htons(ident) &&
-			    hicmp->icmp_seq == htons(seq))
-				return (type == ICMP_TIMXCEED ? -1 : code + 1);
-		} else {
-			up = (struct udphdr *)((u_char *)hip + hlen);
-			/* XXX 8 is a magic number */
-			if (hlen + 12 <= cc &&
-			    hip->ip_p == IPPROTO_UDP &&
-			    up->uh_sport == htons(ident) &&
-			    up->uh_dport == htons(port + seq))
-				return (type == ICMP_TIMXCEED ? -1 : code + 1);
-		}
-	}
-#ifndef ARCHAIC
-	if (verbose) {
-		register int i;
-		u_int32_t *lp = (u_int32_t *)&icp->icmp_ip;
-
-		Printf("\n%d bytes from %s to ", cc, inet_ntoa(from->sin_addr));
-		Printf("%s: icmp type %d (%s) code %d\n",
-		    inet_ntoa(ip->ip_dst), type, pr_type(type), icp->icmp_code);
-		for (i = 4; i < cc ; i += sizeof(*lp))
-			Printf("%2d: x%8.8x\n", i, *lp++);
-	}
-#endif
-	return(0);
-}
-
-
-void
-print(register u_char *buf, register int cc, register struct sockaddr_in *from)
-{
-	register struct ip *ip;
-	register int hlen;
-
-	ip = (struct ip *) buf;
-	hlen = ip->ip_hl << 2;
-	cc -= hlen;
-
-	if (nflag)
-		Printf(" %s", inet_ntoa(from->sin_addr));
-	else
-		Printf(" %s (%s)", inetname(from->sin_addr),
-		    inet_ntoa(from->sin_addr));
-
-	if (verbose)
-		Printf(" %d bytes to %s", cc, inet_ntoa (ip->ip_dst));
-}
 
 /*
  * Checksum routine for Internet Protocol family headers (C Version)
@@ -961,68 +770,6 @@ in_cksum(register u_short *addr, register int len)
 	sum += (sum >> 16);			/* add carry */
 	answer = ~sum;				/* truncate to 16 bits */
 	return (answer);
-}
-
-/*
- * Subtract 2 timeval structs:  out = out - in.
- * Out is assumed to be >= in.
- */
-void
-tvsub(register struct timeval *out, register struct timeval *in)
-{
-
-	if ((out->tv_usec -= in->tv_usec) < 0)   {
-		--out->tv_sec;
-		out->tv_usec += 1000000;
-	}
-	out->tv_sec -= in->tv_sec;
-}
-
-/*
- * Construct an Internet address representation.
- * If the nflag has been supplied, give
- * numeric value, otherwise try for symbolic name.
- */
-char *
-inetname(struct in_addr in)
-{
-	register char *cp;
-	register struct hostent *hp;
-	static int first = 1;
-	static char domain[MAXHOSTNAMELEN + 1], line[MAXHOSTNAMELEN + 1];
-
-	if (first && !nflag) {
-		first = 0;
-		if (gethostname(domain, sizeof(domain) - 1) < 0)
-			domain[0] = '\0';
-		else {
-			cp = strchr(domain, '.');
-			if (cp == NULL) {
-				hp = gethostbyname(domain);
-				if (hp != NULL)
-					cp = strchr(hp->h_name, '.');
-			}
-			if (cp == NULL)
-				domain[0] = '\0';
-			else {
-				++cp;
-				(void)strncpy(domain, cp, sizeof(domain) - 1);
-				domain[sizeof(domain) - 1] = '\0';
-			}
-		}
-	}
-	if (!nflag && in.s_addr != INADDR_ANY) {
-		hp = gethostbyaddr((char *)&in, sizeof(in), AF_INET);
-		if (hp != NULL) {
-			if ((cp = strchr(hp->h_name, '.')) != NULL &&
-			    strcmp(cp + 1, domain) == 0)
-				*cp = '\0';
-			(void)strncpy(line, hp->h_name, sizeof(line) - 1);
-			line[sizeof(line) - 1] = '\0';
-			return (line);
-		}
-	}
-	return (inet_ntoa(in));
 }
 
 struct hostinfo *
@@ -1093,16 +840,6 @@ freehostinfo(register struct hostinfo *hi)
 }
 
 void
-getaddr(register u_int32_t *ap, register char *hostname)
-{
-	register struct hostinfo *hi;
-
-	hi = gethostinfo(hostname);
-	*ap = hi->addrs[0];
-	freehostinfo(hi);
-}
-
-void
 setsin(register struct sockaddr_in *sin, register u_int32_t addr)
 {
 
@@ -1156,8 +893,8 @@ usage(void)
 
 	Fprintf(stderr, "Version %s\n", version);
 	Fprintf(stderr,
-	    "Usage: %s [-dFInrvx] [-g gateway] [-i iface] [-f first_ttl]\n"
-	    "\t[-m max_ttl] [ -p port] [-q nqueries] [-s src_addr] [-t tos]\n"
-	    "\t[-w waittime] [-z pausemsecs] host [packetlen]\n", prog);
+	    "Usage: %s [-dFnrvx] [-g gateway] [-i iface] [-f first_ttl]\n"
+	    "\t[-m max_ttl] [ -p port] [-s src_addr]\n"
+	    "\thost [packetlen]\n", prog);
 	exit(1);
 }
