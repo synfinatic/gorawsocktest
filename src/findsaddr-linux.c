@@ -90,7 +90,7 @@ findsaddr(register const struct sockaddr_in *to,
 	static char errbuf[132];
 
 	if ((f = fopen(route, "r")) == NULL) {
-		sprintf(errbuf, "open %s: %.128s", route, strerror(errno));
+		sprintf(errbuf, "open %s: %s", route, strerror(errno));
 		return (errbuf);
 	}
 
