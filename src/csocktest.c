@@ -235,23 +235,9 @@ static const char rcsid[] =
 #include "os-proto.h"
 #endif
 
-/* rfc1716 */
-#ifndef ICMP_UNREACH_FILTER_PROHIB
-#define ICMP_UNREACH_FILTER_PROHIB	13	/* admin prohibited filter */
-#endif
-#ifndef ICMP_UNREACH_HOST_PRECEDENCE
-#define ICMP_UNREACH_HOST_PRECEDENCE	14	/* host precedence violation */
-#endif
-#ifndef ICMP_UNREACH_PRECEDENCE_CUTOFF
-#define ICMP_UNREACH_PRECEDENCE_CUTOFF	15	/* precedence cutoff */
-#endif
-
 #include "findsaddr.h"
 #include "ifaddrlist.h"
 #include "traceroute.h"
-
-/* Maximum number of gateways (include room for one noop) */
-#define NGATEWAYS ((int)((MAX_IPOPTLEN - IPOPT_MINOFF - 1) / sizeof(u_int32_t)))
 
 #ifndef MAXHOSTNAMELEN
 #define MAXHOSTNAMELEN	64
@@ -274,14 +260,6 @@ struct outdata {
 	struct timeval tv;	/* time packet left */
 };
 
-#ifndef HAVE_ICMP_NEXTMTU
-/* Path MTU Discovery (RFC1191) */
-struct my_pmtu {
-	u_short ipm_void;
-	u_short ipm_nextmtu;
-};
-#endif
-
 u_char	packet[512];		/* last inbound (icmp) packet */
 
 struct ip *outip;		/* last output (udp) packet */
@@ -289,9 +267,6 @@ struct udphdr *outudp;		/* last output (udp) packet */
 struct outdata *outdata;	/* last output (udp) packet */
 
 struct icmp *outicmp;		/* last output (icmp) packet */
-
-/* loose source route gateway list (including room for final destination) */
-u_int32_t gwlist[NGATEWAYS + 1];
 
 int s;				/* receive (icmp) socket file descriptor */
 int sndsock;			/* send (udp/icmp) socket file descriptor */
@@ -333,7 +308,6 @@ extern int opterr;
 extern char *optarg;
 
 /* Forwards */
-double	deltaT(struct timeval *, struct timeval *);
 void	freehostinfo(struct hostinfo *);
 void	getaddr(u_int32_t *, char *);
 struct	hostinfo *gethostinfo(char *);
@@ -380,7 +354,7 @@ main(int argc, char **argv)
 		prog = argv[0];
 
 	opterr = 0;
-	while ((op = getopt(argc, argv, "dFInrvxf:g:i:m:p:q:s:t:w:z:")) != EOF)
+	while ((op = getopt(argc, argv, "dFInrvxf:i:m:p:q:s:t:w:z:")) != EOF)
 		switch (op) {
 
 		case 'd':
@@ -393,17 +367,6 @@ main(int argc, char **argv)
 
 		case 'F':
 			off = IP_DF;
-			break;
-
-		case 'g':
-			if (lsrr >= NGATEWAYS) {
-				Fprintf(stderr,
-				    "%s: No more than %d gateways\n",
-				    prog, NGATEWAYS);
-				exit(1);
-			}
-			getaddr(gwlist + lsrr, optarg);
-			++lsrr;
 			break;
 
 		case 'i':
@@ -480,8 +443,6 @@ main(int argc, char **argv)
 	if (!doipcksum)
 		Fprintf(stderr, "%s: Warning: ip checksums disabled\n", prog);
 
-	if (lsrr > 0)
-		optlen = (lsrr + 1) * sizeof(gwlist[0]);
 	minpacket = sizeof(*outip) + sizeof(*outdata) + optlen;
 	if (useicmp)
 		minpacket += 8;			/* XXX magic number */
@@ -531,57 +492,26 @@ main(int argc, char **argv)
 	if (settos)
 		outip->ip_tos = tos;
 #ifdef BYTESWAP_IP_HDR
+	Fprintf(stderr, "we are swapping IP_HDR len/offset\n");
 	outip->ip_len = htons(packlen);
 	outip->ip_off = htons(off);
 #else
+	Fprintf(stderr, "we are using host byte order IP len/offset\n");
 	outip->ip_len = packlen;
 	outip->ip_off = off;
 #endif
 	outp = (u_char *)(outip + 1);
-#ifdef HAVE_RAW_OPTIONS
-	if (lsrr > 0) {
-		register u_char *optlist;
-
-		optlist = outp;
-		outp += optlen;
-
-		/* final hop */
-		gwlist[lsrr] = to->sin_addr.s_addr;
-
-		outip->ip_dst.s_addr = gwlist[0];
-
-		/* force 4 byte alignment */
-		optlist[0] = IPOPT_NOP;
-		/* loose source route option */
-		optlist[1] = IPOPT_LSRR;
-		i = lsrr * sizeof(gwlist[0]);
-		optlist[2] = i + 3;
-		/* Pointer to LSRR addresses */
-		optlist[3] = IPOPT_MINOFF;
-		memcpy(optlist + 4, gwlist + 1, i);
-	} else
-#endif
-		outip->ip_dst = to->sin_addr;
+	outip->ip_dst = to->sin_addr;
 
 	outip->ip_hl = (outp - (u_char *)outip) >> 2;
 	ident = (getpid() & 0xffff) | 0x8000;
-	if (useicmp) {
-		outip->ip_p = IPPROTO_ICMP;
+	outip->ip_p = IPPROTO_UDP;
 
-		outicmp = (struct icmp *)outp;
-		outicmp->icmp_type = ICMP_ECHO;
-		outicmp->icmp_id = htons(ident);
-
-		outdata = (struct outdata *)(outp + 8);	/* XXX magic number */
-	} else {
-		outip->ip_p = IPPROTO_UDP;
-
-		outudp = (struct udphdr *)outp;
-		outudp->uh_sport = htons(ident);
-		outudp->uh_ulen =
-		    htons((u_short)(packlen - (sizeof(*outip) + optlen)));
-		outdata = (struct outdata *)(outudp + 1);
-	}
+	outudp = (struct udphdr *)outp;
+	outudp->uh_sport = htons(ident);
+	outudp->uh_ulen =
+		htons((u_short)(packlen - (sizeof(*outip) + optlen)));
+	outdata = (struct outdata *)(outudp + 1);
 
 	cp = "icmp";
 	if ((pe = getprotobyname(cp)) == NULL) {
@@ -608,51 +538,14 @@ main(int argc, char **argv)
 		(void)setsockopt(s, SOL_SOCKET, SO_DONTROUTE, (char *)&on,
 		    sizeof(on));
 
-#ifndef __hpux
 	sndsock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
-#else
-	sndsock = socket(AF_INET, SOCK_RAW,
-	    useicmp ? IPPROTO_ICMP : IPPROTO_UDP);
-#endif
 	if (sndsock < 0) {
 		Fprintf(stderr, "%s: raw socket: %s\n", prog, strerror(errno));
 		exit(1);
 	}
 
-#if defined(IP_OPTIONS) && !defined(HAVE_RAW_OPTIONS)
-	if (lsrr > 0) {
-		u_char optlist[MAX_IPOPTLEN];
-
-		cp = "ip";
-		if ((pe = getprotobyname(cp)) == NULL) {
-			Fprintf(stderr, "%s: unknown protocol %s\n", prog, cp);
-			exit(1);
-		}
-
-		/* final hop */
-		gwlist[lsrr] = to->sin_addr.s_addr;
-		++lsrr;
-
-		/* force 4 byte alignment */
-		optlist[0] = IPOPT_NOP;
-		/* loose source route option */
-		optlist[1] = IPOPT_LSRR;
-		i = lsrr * sizeof(gwlist[0]);
-		optlist[2] = i + 3;
-		/* Pointer to LSRR addresses */
-		optlist[3] = IPOPT_MINOFF;
-		memcpy(optlist + 4, gwlist, i);
-
-		if ((setsockopt(sndsock, pe->p_proto, IP_OPTIONS,
-		    (char *)optlist, i + sizeof(gwlist[0]))) < 0) {
-			Fprintf(stderr, "%s: IP_OPTIONS: %s\n",
-			    prog, strerror(errno));
-			exit(1);
-		    }
-	}
-#endif
-
 #ifdef SO_SNDBUF
+	Fprintf(stderr, "we set SNDBUF\n");
 	if (setsockopt(sndsock, SOL_SOCKET, SO_SNDBUF, (char *)&packlen,
 	    sizeof(packlen)) < 0) {
 		Fprintf(stderr, "%s: SO_SNDBUF: %s\n", prog, strerror(errno));
@@ -660,6 +553,7 @@ main(int argc, char **argv)
 	}
 #endif
 #ifdef IP_HDRINCL
+	Fprintf(stderr, "we set HDRINCL\n");
 	if (setsockopt(sndsock, IPPROTO_IP, IP_HDRINCL, (char *)&on,
 	    sizeof(on)) < 0) {
 		Fprintf(stderr, "%s: IP_HDRINCL: %s\n", prog, strerror(errno));
@@ -792,9 +686,7 @@ main(int argc, char **argv)
 			(void)fflush(stdout);
 		}
 		putchar('\n');
-		if (got_there ||
-		    (unreachable > 0 && unreachable >= nprobes - 1))
-			break;
+		break;
 	}
 	exit(0);
 }
@@ -805,7 +697,12 @@ send_probe(register int seq, int ttl, register struct timeval *tp)
 	register int cc;
 	register struct udpiphdr *ui, *oui;
 	struct ip tip;
+	/*
+	struct in_addr fake;
+	inet_aton("172.16.1.162", &fake);
 
+	outip->ip_src = fake;
+	*/
 	outip->ip_ttl = ttl;
 #ifndef __hpux
 	outip->ip_id = htons(ident + seq);
@@ -906,16 +803,6 @@ send_probe(register int seq, int ttl, register struct timeval *tp)
 		    prog, hostname, packlen, cc);
 		(void)fflush(stdout);
 	}
-}
-
-double
-deltaT(struct timeval *t1p, struct timeval *t2p)
-{
-	register double dt;
-
-	dt = (double)(t2p->tv_sec - t1p->tv_sec) * 1000.0 +
-	     (double)(t2p->tv_usec - t1p->tv_usec) / 1000.0;
-	return (dt);
 }
 
 /*

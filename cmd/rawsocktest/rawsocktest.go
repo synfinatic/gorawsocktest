@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
 	"syscall"
+	"unsafe"
 
 	"github.com/alecthomas/kong"
 	"github.com/google/gopacket"
@@ -24,6 +26,20 @@ type CLI struct {
 }
 
 var log *logrus.Logger
+
+func endian() binary.ByteOrder {
+	buf := [2]byte{}
+	*(*uint16)(unsafe.Pointer(&buf[0])) = uint16(0xABCD)
+
+	switch buf {
+	case [2]byte{0xCD, 0xAB}:
+		return binary.LittleEndian
+	case [2]byte{0xAB, 0xCD}:
+		return binary.BigEndian
+	default:
+		panic("Could not determine native endianness.")
+	}
+}
 
 func main() {
 	var err error
@@ -71,7 +87,7 @@ func main() {
 	udp.SetNetworkLayerForChecksum(ip4)
 
 	opts := gopacket.SerializeOptions{
-		FixLengths:       true,
+		FixLengths:       false,
 		ComputeChecksums: true,
 	}
 
@@ -81,16 +97,22 @@ func main() {
 	bufLen := len(b)
 
 	fmt.Printf("bytes: %s\n", hex.EncodeToString(b))
+	fmt.Printf("use host byte order for ip.len & ip.offset\n")
+	// endian().PutUint16(b[2:], uint16(len(b)))
+
+	fmt.Printf("bytes: %s\n", hex.EncodeToString(b))
 
 	var s int
 	// open socket
 	if s, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_RAW); err != nil {
 		log.WithError(err).Fatalf("unable to open socket")
 	}
+
 	// set send buffer size
 	if err = syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_SNDBUF, bufLen); err != nil {
 		log.WithError(err).Fatalf("unable to SNDBUF")
 	}
+
 	// we will provide the IP header
 	if err = syscall.SetsockoptInt(s, syscall.IPPROTO_IP, syscall.IP_HDRINCL, 1); err != nil {
 		log.WithError(err).Fatalf("unable to IP_HDRINCL")
