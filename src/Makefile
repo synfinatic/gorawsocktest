@@ -10,7 +10,7 @@ csocktest-linux:
 	gcc -lc -o csocktest $(FILES) findsaddr-linux.c
 
 csocktest-darwin:
-	gcc -lc -o csocktest $(DEFS) $(FILES)
+	gcc -lc -o csocktest $(DEFS) $(FILES) strerror.c usleep.c version.c
 
 csocktest-freebsd:
 	gcc -lc -o csocktest $(DEFS) $(FILES) findsaddr-generic.c
