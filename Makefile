@@ -10,5 +10,5 @@ dist:
 
 rawsocktest: dist/rawsocktest
 
-dist/rawsocktest: cmd/rawsocktest/*.go 
+dist/rawsocktest: cmd/rawsocktest/*.go pkg/rawlayers/*.go
 	go build -o dist/rawsocktest ./cmd/rawsocktest/...

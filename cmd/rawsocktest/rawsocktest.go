@@ -2,17 +2,16 @@ package main
 
 import (
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
 	"syscall"
-	"unsafe"
 
 	"github.com/alecthomas/kong"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/sirupsen/logrus"
+	"github.com/synfinatic/gorawsocktest/pkg/rawlayers"
 )
 
 type CLI struct {
@@ -22,24 +21,10 @@ type CLI struct {
 	DstIP     string `kong:"short='d',help='Destination IP',required"`
 	SrcPort   uint16 `kong:"short='S',help='UDP source port',default='5555'"`
 	DstPort   uint16 `kong:"short='D',help='UDP destination port',default='6666'"`
-	Payload   string `kong:"short='p',help='UDP payload',default='this is my payload data'"`
+	Payload   string `kong:"short='p',help='UDP payload',default='this is my payload datas'"`
 }
 
 var log *logrus.Logger
-
-func endian() binary.ByteOrder {
-	buf := [2]byte{}
-	*(*uint16)(unsafe.Pointer(&buf[0])) = uint16(0xABCD)
-
-	switch buf {
-	case [2]byte{0xCD, 0xAB}:
-		return binary.LittleEndian
-	case [2]byte{0xAB, 0xCD}:
-		return binary.BigEndian
-	default:
-		panic("Could not determine native endianness.")
-	}
-}
 
 func main() {
 	var err error
@@ -57,11 +42,13 @@ func main() {
 		log.Fatalf("must run rawsocktest as root")
 	}
 
+	ulen := []byte{0, 0}
+	binary.BigEndian.PutUint16(ulen, uint16(len(cli.Payload)))
 	payload := gopacket.Payload([]byte(cli.Payload))
-	udp := &layers.UDP{
+	udp := &rawlayers.UDP{
 		SrcPort:  layers.UDPPort(cli.SrcPort),
 		DstPort:  layers.UDPPort(cli.DstPort),
-		Length:   0, // calculated
+		Length:   0, // binary.BigEndian.Uint16(ulen), // calculated
 		Checksum: 0, // calculated
 	}
 
@@ -69,7 +56,7 @@ func main() {
 	dstIP := net.ParseIP(cli.DstIP)
 	fmt.Printf("%s:%d -> %s:%d\n", cli.SrcIP, cli.SrcPort, cli.DstIP, cli.DstPort)
 
-	ip4 := &layers.IPv4{
+	ip4 := &rawlayers.IPv4{
 		Version:    4,
 		IHL:        5,
 		TOS:        0,
@@ -77,7 +64,7 @@ func main() {
 		Id:         0x1234,
 		Flags:      0,
 		FragOffset: 0,
-		TTL:        16,
+		TTL:        1,
 		Protocol:   layers.IPProtocolUDP,
 		Checksum:   0, // calculated
 		SrcIP:      srcIP,
@@ -87,20 +74,18 @@ func main() {
 	udp.SetNetworkLayerForChecksum(ip4)
 
 	opts := gopacket.SerializeOptions{
-		FixLengths:       false,
+		FixLengths:       true,
 		ComputeChecksums: true,
 	}
 
 	buffer := gopacket.NewSerializeBuffer()
-	gopacket.SerializeLayers(buffer, opts, ip4, udp, payload)
+	if err = gopacket.SerializeLayers(buffer, opts, ip4, udp, payload); err != nil {
+		log.WithError(err).Fatalf("unable to serialize")
+	}
 	b := buffer.Bytes()
 	bufLen := len(b)
 
-	fmt.Printf("bytes: %s\n", hex.EncodeToString(b))
-	fmt.Printf("use host byte order for ip.len & ip.offset\n")
-	// endian().PutUint16(b[2:], uint16(len(b)))
-
-	fmt.Printf("bytes: %s\n", hex.EncodeToString(b))
+	printPacket(b)
 
 	var s int
 	// open socket
@@ -145,4 +130,22 @@ func main() {
 	}
 
 	log.Infof("Sent %d bytes to %s:%d", bufLen, cli.DstIP, cli.DstPort)
+}
+
+func printPacket(b []byte) {
+	first := true
+	for cIdx, c := range b {
+		if cIdx%16 == 0 {
+			if !first {
+				fmt.Printf("\n\t")
+			} else {
+				fmt.Printf("\t")
+			}
+			first = false
+		} else if cIdx%2 == 0 {
+			fmt.Printf(" ")
+		}
+		fmt.Printf("%02x", c)
+	}
+	fmt.Printf("\n")
 }
