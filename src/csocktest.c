@@ -253,19 +253,23 @@ struct hostinfo {
 	u_int32_t *addrs;
 };
 
-/* Data section of the probe packet */
-struct outdata {
+struct old_outdata {
 	u_char seq;		/* sequence number of this packet */
 	u_char ttl;		/* ttl packet left with */
 	struct timeval tv;	/* time packet left */
+};
+
+/* Data section of the probe packet */
+union outdata {
+	struct old_outdata old;
+	char new[24];
 };
 
 u_char	packet[512];		/* last inbound (icmp) packet */
 
 struct ip *outip;		/* last output (udp) packet */
 struct udphdr *outudp;		/* last output (udp) packet */
-struct outdata *outdata;	/* last output (udp) packet */
-
+union outdata *outdata;	/* last output (udp) packet */
 struct icmp *outicmp;		/* last output (icmp) packet */
 
 int s;				/* receive (icmp) socket file descriptor */
@@ -343,7 +347,7 @@ main(int argc, char **argv)
 		prog = argv[0];
 
 	opterr = 0;
-	while ((op = getopt(argc, argv, "dFnrvxf:i:m:p:s:")) != EOF)
+	while ((op = getopt(argc, argv, "dFnrvxf:I:i:m:p:s:")) != EOF)
 		switch (op) {
 
 		case 'd':
@@ -356,6 +360,11 @@ main(int argc, char **argv)
 
 		case 'F':
 			off = IP_DF;
+			break;
+
+		case 'I':
+			ident = (u_short)str2val(optarg, "ip id", 1, 65535);
+			Fprintf(stderr, "using ip id: 0x%04x\n", ident);
 			break;
 
 		case 'i':
@@ -409,7 +418,7 @@ main(int argc, char **argv)
 	if (!doipcksum)
 		Fprintf(stderr, "%s: Warning: ip checksums disabled\n", prog);
 
-	minpacket = sizeof(*outip) + sizeof(*outdata) + optlen;
+	minpacket = sizeof(*outip) + sizeof(outdata->new) + optlen;
 	minpacket += sizeof(*outudp);
 	packlen = minpacket;			/* minimum sized packet */
 
@@ -453,11 +462,11 @@ main(int argc, char **argv)
 
 	outip->ip_v = IPVERSION;
 #ifdef BYTESWAP_IP_HDR
-	Fprintf(stderr, "we are swapping IP_HDR len/offset\n");
+	Fprintf(stderr, "we are using network byte order for IP len/off\n");
 	outip->ip_len = htons(packlen);
 	outip->ip_off = htons(off);
 #else
-	Fprintf(stderr, "we are using host byte order IP len/offset\n");
+	Fprintf(stderr, "we are using host byte order for IP len/off\n");
 	outip->ip_len = packlen;
 	outip->ip_off = off;
 #endif
@@ -465,14 +474,15 @@ main(int argc, char **argv)
 	outip->ip_dst = to->sin_addr;
 
 	outip->ip_hl = (outp - (u_char *)outip) >> 2;
-	ident = (getpid() & 0xffff) | 0x8000;
+	if (0 == ident) {
+		ident = (getpid() & 0xffff) | 0x8000;
+	}
 	outip->ip_p = IPPROTO_UDP;
 
 	outudp = (struct udphdr *)outp;
 	outudp->uh_sport = htons(ident);
-	outudp->uh_ulen =
-		htons((u_short)(packlen - (sizeof(*outip) + optlen)));
-	outdata = (struct outdata *)(outudp + 1);
+	outudp->uh_ulen = htons((u_short)(packlen - (sizeof(*outip) + optlen)));
+	outdata = (union outdata *)(outudp + 1);
 
 	cp = "icmp";
 	if ((pe = getprotobyname(cp)) == NULL) {
@@ -646,16 +656,9 @@ send_probe(register int seq, int ttl, register struct timeval *tp)
 	register int cc;
 	register struct udpiphdr *ui, *oui;
 	struct ip tip;
-	/*
-	struct in_addr fake;
-	inet_aton("172.16.1.162", &fake);
 
-	outip->ip_src = fake;
-	*/
 	outip->ip_ttl = ttl;
-#ifndef __hpux
 	outip->ip_id = htons(ident + seq);
-#endif
 
 	/*
 	 * In most cases, the kernel will recalculate the ip checksum.
@@ -669,10 +672,12 @@ send_probe(register int seq, int ttl, register struct timeval *tp)
 			outip->ip_sum = 0xffff;
 	}
 
-	/* Payload */
+	/* Payload 
 	outdata->seq = seq;
 	outdata->ttl = ttl;
 	outdata->tv = *tp;
+	*/
+	strncpy(outdata->new, "this is my payload datas", 24);
 
 	outudp->uh_dport = htons(port + seq);
 
