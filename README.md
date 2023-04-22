@@ -3,7 +3,7 @@
 A little project to illustrate how `SOCK_RAW` sockets work on various operating systems.
 All testing has been done on an x86_64/little endian architecture.
 
-The C code is a simplified version of [traceroute](
+The C code in the [src](src directory) is a simplified version of [traceroute](
 ftp://ftp.ee.lbl.gov/traceroute-1.4a12.tar.gz) and basically does:
 
 ```C
@@ -24,6 +24,11 @@ whereto.sin_addr.s_addr = inet_aton("x.x.x.x"); // destination IP
 
 sendto(s, (char *)packet, packetlen, 0, &whereto, sizeof(whereto));
 ```
+
+## Building
+
+You should be able to build both the Go `rawsocktest` and C `csocktest` binaries
+by typing `make` (or `gmake`).  Binaries will be written to the `dist` directory.
 
 ## Darwin/macOS
 
