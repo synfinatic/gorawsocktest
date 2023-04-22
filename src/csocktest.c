@@ -27,177 +27,6 @@ static const char rcsid[] =
     "@(#)$Id: traceroute.c,v 1.68 2000/12/14 08:04:33 leres Exp $ (LBL)";
 #endif
 
-/*
- * traceroute host  - trace the route ip packets follow going to "host".
- *
- * Attempt to trace the route an ip packet would follow to some
- * internet host.  We find out intermediate hops by launching probe
- * packets with a small ttl (time to live) then listening for an
- * icmp "time exceeded" reply from a gateway.  We start our probes
- * with a ttl of one and increase by one until we get an icmp "port
- * unreachable" (which means we got to "host") or hit a max (which
- * defaults to 30 hops & can be changed with the -m flag).  Three
- * probes (change with -q flag) are sent at each ttl setting and a
- * line is printed showing the ttl, address of the gateway and
- * round trip time of each probe.  If the probe answers come from
- * different gateways, the address of each responding system will
- * be printed.  If there is no response within a 5 sec. timeout
- * interval (changed with the -w flag), a "*" is printed for that
- * probe.
- *
- * Probe packets are UDP format.  We don't want the destination
- * host to process them so the destination port is set to an
- * unlikely value (if some clod on the destination is using that
- * value, it can be changed with the -p flag).
- *
- * A sample use might be:
- *
- *     [yak 71]% traceroute nis.nsf.net.
- *     traceroute to nis.nsf.net (35.1.1.48), 30 hops max, 56 byte packet
- *      1  helios.ee.lbl.gov (128.3.112.1)  19 ms  19 ms  0 ms
- *      2  lilac-dmc.Berkeley.EDU (128.32.216.1)  39 ms  39 ms  19 ms
- *      3  lilac-dmc.Berkeley.EDU (128.32.216.1)  39 ms  39 ms  19 ms
- *      4  ccngw-ner-cc.Berkeley.EDU (128.32.136.23)  39 ms  40 ms  39 ms
- *      5  ccn-nerif22.Berkeley.EDU (128.32.168.22)  39 ms  39 ms  39 ms
- *      6  128.32.197.4 (128.32.197.4)  40 ms  59 ms  59 ms
- *      7  131.119.2.5 (131.119.2.5)  59 ms  59 ms  59 ms
- *      8  129.140.70.13 (129.140.70.13)  99 ms  99 ms  80 ms
- *      9  129.140.71.6 (129.140.71.6)  139 ms  239 ms  319 ms
- *     10  129.140.81.7 (129.140.81.7)  220 ms  199 ms  199 ms
- *     11  nic.merit.edu (35.1.1.48)  239 ms  239 ms  239 ms
- *
- * Note that lines 2 & 3 are the same.  This is due to a buggy
- * kernel on the 2nd hop system -- lbl-csam.arpa -- that forwards
- * packets with a zero ttl.
- *
- * A more interesting example is:
- *
- *     [yak 72]% traceroute allspice.lcs.mit.edu.
- *     traceroute to allspice.lcs.mit.edu (18.26.0.115), 30 hops max
- *      1  helios.ee.lbl.gov (128.3.112.1)  0 ms  0 ms  0 ms
- *      2  lilac-dmc.Berkeley.EDU (128.32.216.1)  19 ms  19 ms  19 ms
- *      3  lilac-dmc.Berkeley.EDU (128.32.216.1)  39 ms  19 ms  19 ms
- *      4  ccngw-ner-cc.Berkeley.EDU (128.32.136.23)  19 ms  39 ms  39 ms
- *      5  ccn-nerif22.Berkeley.EDU (128.32.168.22)  20 ms  39 ms  39 ms
- *      6  128.32.197.4 (128.32.197.4)  59 ms  119 ms  39 ms
- *      7  131.119.2.5 (131.119.2.5)  59 ms  59 ms  39 ms
- *      8  129.140.70.13 (129.140.70.13)  80 ms  79 ms  99 ms
- *      9  129.140.71.6 (129.140.71.6)  139 ms  139 ms  159 ms
- *     10  129.140.81.7 (129.140.81.7)  199 ms  180 ms  300 ms
- *     11  129.140.72.17 (129.140.72.17)  300 ms  239 ms  239 ms
- *     12  * * *
- *     13  128.121.54.72 (128.121.54.72)  259 ms  499 ms  279 ms
- *     14  * * *
- *     15  * * *
- *     16  * * *
- *     17  * * *
- *     18  ALLSPICE.LCS.MIT.EDU (18.26.0.115)  339 ms  279 ms  279 ms
- *
- * (I start to see why I'm having so much trouble with mail to
- * MIT.)  Note that the gateways 12, 14, 15, 16 & 17 hops away
- * either don't send ICMP "time exceeded" messages or send them
- * with a ttl too small to reach us.  14 - 17 are running the
- * MIT C Gateway code that doesn't send "time exceeded"s.  God
- * only knows what's going on with 12.
- *
- * The silent gateway 12 in the above may be the result of a bug in
- * the 4.[23]BSD network code (and its derivatives):  4.x (x <= 3)
- * sends an unreachable message using whatever ttl remains in the
- * original datagram.  Since, for gateways, the remaining ttl is
- * zero, the icmp "time exceeded" is guaranteed to not make it back
- * to us.  The behavior of this bug is slightly more interesting
- * when it appears on the destination system:
- *
- *      1  helios.ee.lbl.gov (128.3.112.1)  0 ms  0 ms  0 ms
- *      2  lilac-dmc.Berkeley.EDU (128.32.216.1)  39 ms  19 ms  39 ms
- *      3  lilac-dmc.Berkeley.EDU (128.32.216.1)  19 ms  39 ms  19 ms
- *      4  ccngw-ner-cc.Berkeley.EDU (128.32.136.23)  39 ms  40 ms  19 ms
- *      5  ccn-nerif35.Berkeley.EDU (128.32.168.35)  39 ms  39 ms  39 ms
- *      6  csgw.Berkeley.EDU (128.32.133.254)  39 ms  59 ms  39 ms
- *      7  * * *
- *      8  * * *
- *      9  * * *
- *     10  * * *
- *     11  * * *
- *     12  * * *
- *     13  rip.Berkeley.EDU (128.32.131.22)  59 ms !  39 ms !  39 ms !
- *
- * Notice that there are 12 "gateways" (13 is the final
- * destination) and exactly the last half of them are "missing".
- * What's really happening is that rip (a Sun-3 running Sun OS3.5)
- * is using the ttl from our arriving datagram as the ttl in its
- * icmp reply.  So, the reply will time out on the return path
- * (with no notice sent to anyone since icmp's aren't sent for
- * icmp's) until we probe with a ttl that's at least twice the path
- * length.  I.e., rip is really only 7 hops away.  A reply that
- * returns with a ttl of 1 is a clue this problem exists.
- * Traceroute prints a "!" after the time if the ttl is <= 1.
- * Since vendors ship a lot of obsolete (DEC's Ultrix, Sun 3.x) or
- * non-standard (HPUX) software, expect to see this problem
- * frequently and/or take care picking the target host of your
- * probes.
- *
- * Other possible annotations after the time are !H, !N, !P (got a host,
- * network or protocol unreachable, respectively), !S or !F (source
- * route failed or fragmentation needed -- neither of these should
- * ever occur and the associated gateway is busted if you see one).  If
- * almost all the probes result in some kind of unreachable, traceroute
- * will give up and exit.
- *
- * Notes
- * -----
- * This program must be run by root or be setuid.  (I suggest that
- * you *don't* make it setuid -- casual use could result in a lot
- * of unnecessary traffic on our poor, congested nets.)
- *
- * This program requires a kernel mod that does not appear in any
- * system available from Berkeley:  A raw ip socket using proto
- * IPPROTO_RAW must interpret the data sent as an ip datagram (as
- * opposed to data to be wrapped in a ip datagram).  See the README
- * file that came with the source to this program for a description
- * of the mods I made to /sys/netinet/raw_ip.c.  Your mileage may
- * vary.  But, again, ANY 4.x (x < 4) BSD KERNEL WILL HAVE TO BE
- * MODIFIED TO RUN THIS PROGRAM.
- *
- * The udp port usage may appear bizarre (well, ok, it is bizarre).
- * The problem is that an icmp message only contains 8 bytes of
- * data from the original datagram.  8 bytes is the size of a udp
- * header so, if we want to associate replies with the original
- * datagram, the necessary information must be encoded into the
- * udp header (the ip id could be used but there's no way to
- * interlock with the kernel's assignment of ip id's and, anyway,
- * it would have taken a lot more kernel hacking to allow this
- * code to set the ip id).  So, to allow two or more users to
- * use traceroute simultaneously, we use this task's pid as the
- * source port (the high bit is set to move the port number out
- * of the "likely" range).  To keep track of which probe is being
- * replied to (so times and/or hop counts don't get confused by a
- * reply that was delayed in transit), we increment the destination
- * port number before each probe.
- *
- * Don't use this as a coding example.  I was trying to find a
- * routing problem and this code sort-of popped out after 48 hours
- * without sleep.  I was amazed it ever compiled, much less ran.
- *
- * I stole the idea for this program from Steve Deering.  Since
- * the first release, I've learned that had I attended the right
- * IETF working group meetings, I also could have stolen it from Guy
- * Almes or Matt Mathis.  I don't know (or care) who came up with
- * the idea first.  I envy the originators' perspicacity and I'm
- * glad they didn't keep the idea a secret.
- *
- * Tim Seaver, Ken Adelman and C. Philip Wood provided bug fixes and/or
- * enhancements to the original distribution.
- *
- * I've hacked up a round-trip-route version of this that works by
- * sending a loose-source-routed udp datagram through the destination
- * back to yourself.  Unfortunately, SO many gateways botch source
- * routing, the thing is almost worthless.  Maybe one day...
- *
- *  -- Van Jacobson (van@ee.lbl.gov)
- *     Tue Dec 20 03:50:13 PST 1988
- */
-
 #include <sys/param.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
@@ -289,19 +118,12 @@ char *device;
 static const char devnull[] = "/dev/null";
 
 int max_ttl = 30;
-int first_ttl = 1;
+int first_ttl = 15;
 u_short ident;
 u_short port = 32768 + 666;	/* start udp dest port # for probe packets */
 
-int options;			/* socket options */
 int verbose;
 int nflag;			/* print addresses numerically */
-#ifdef CANT_HACK_IPCKSUM
-int doipcksum = 0;		/* don't calculate ip checksums by default */
-#else
-int doipcksum = 1;		/* calculate ip checksums by default */
-#endif
-int optlen;			/* length of ip options */
 
 extern int optind;
 extern int opterr;
@@ -339,28 +161,17 @@ main(int argc, char **argv)
 	struct ifaddrlist *al;
 	char errbuf[132];
 
-	if (argv[0] == NULL)
-		prog = "traceroute";
-	else if ((cp = strrchr(argv[0], '/')) != NULL)
+	if (argv[0] == NULL) {
+		prog = "csocktest";
+	} else if ((cp = strrchr(argv[0], '/')) != NULL) {
 		prog = cp + 1;
-	else
+	} else {
 		prog = argv[0];
+	}
 
 	opterr = 0;
-	while ((op = getopt(argc, argv, "dFnrvxf:I:i:m:p:s:")) != EOF)
+	while ((op = getopt(argc, argv, "nvI:i:p:s:")) != EOF) {
 		switch (op) {
-
-		case 'd':
-			options |= SO_DEBUG;
-			break;
-
-		case 'f':
-			first_ttl = str2val(optarg, "first ttl", 1, 255);
-			break;
-
-		case 'F':
-			off = IP_DF;
-			break;
 
 		case 'I':
 			ident = (u_short)str2val(optarg, "ip id", 1, 65535);
@@ -371,21 +182,12 @@ main(int argc, char **argv)
 			device = optarg;
 			break;
 
-		case 'm':
-			max_ttl = str2val(optarg, "max ttl", 1, 255);
-			break;
-
 		case 'n':
 			++nflag;
 			break;
 
 		case 'p':
-			port = (u_short)str2val(optarg, "port",
-			    1, (1 << 16) - 1);
-			break;
-
-		case 'r':
-			options |= SO_DONTROUTE;
+			port = (u_short)str2val(optarg, "port", 1, (1 << 16) - 1);
 			break;
 
 		case 's':
@@ -400,25 +202,12 @@ main(int argc, char **argv)
 			++verbose;
 			break;
 
-		case 'x':
-			doipcksum = (doipcksum == 0);
-			break;
-
 		default:
 			usage();
 		}
-
-	if (first_ttl > max_ttl) {
-		Fprintf(stderr,
-		    "%s: first ttl (%d) may not be greater than max ttl (%d)\n",
-		    prog, first_ttl, max_ttl);
-		exit(1);
 	}
 
-	if (!doipcksum)
-		Fprintf(stderr, "%s: Warning: ip checksums disabled\n", prog);
-
-	minpacket = sizeof(*outip) + sizeof(outdata->new) + optlen;
+	minpacket = sizeof(*outip) + sizeof(outdata->new);
 	minpacket += sizeof(*outudp);
 	packlen = minpacket;			/* minimum sized packet */
 
@@ -426,18 +215,17 @@ main(int argc, char **argv)
 	switch (argc - optind) {
 
 	case 2:
-		packlen = str2val(argv[optind + 1],
-		    "packet length", minpacket, maxpacket);
+		packlen = str2val(argv[optind + 1], "packet length", minpacket, maxpacket);
 		/* Fall through */
 
 	case 1:
 		hostname = argv[optind];
 		hi = gethostinfo(hostname);
 		setsin(to, hi->addrs[0]);
-		if (hi->n > 1)
-			Fprintf(stderr,
-		    "%s: Warning: %s has multiple addresses; using %s\n",
+		if (hi->n > 1) {
+			Fprintf(stderr, "%s: Warning: %s has multiple addresses; using %s\n",
 				prog, hostname, inet_ntoa(to->sin_addr));
+		}
 		hostname = hi->name;
 		hi->name = NULL;
 		freehostinfo(hi);
@@ -481,7 +269,7 @@ main(int argc, char **argv)
 
 	outudp = (struct udphdr *)outp;
 	outudp->uh_sport = htons(ident);
-	outudp->uh_ulen = htons((u_short)(packlen - (sizeof(*outip) + optlen)));
+	outudp->uh_ulen = htons((u_short)(packlen - (sizeof(*outip))));
 	outdata = (union outdata *)(outudp + 1);
 
 	cp = "icmp";
@@ -494,20 +282,13 @@ main(int argc, char **argv)
 	if (open(devnull, O_RDONLY) < 0 ||
 	    open(devnull, O_RDONLY) < 0 ||
 	    open(devnull, O_RDONLY) < 0) {
-		Fprintf(stderr, "%s: open \"%s\": %s\n",
-		    prog, devnull, strerror(errno));
+		Fprintf(stderr, "%s: open \"%s\": %s\n", prog, devnull, strerror(errno));
 		exit(1);
 	}
 	if ((s = socket(AF_INET, SOCK_RAW, pe->p_proto)) < 0) {
 		Fprintf(stderr, "%s: icmp socket: %s\n", prog, strerror(errno));
 		exit(1);
 	}
-	if (options & SO_DEBUG)
-		(void)setsockopt(s, SOL_SOCKET, SO_DEBUG, (char *)&on,
-		    sizeof(on));
-	if (options & SO_DONTROUTE)
-		(void)setsockopt(s, SOL_SOCKET, SO_DONTROUTE, (char *)&on,
-		    sizeof(on));
 
 	sndsock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
 	if (sndsock < 0) {
@@ -517,26 +298,18 @@ main(int argc, char **argv)
 
 #ifdef SO_SNDBUF
 	Fprintf(stderr, "we set SNDBUF\n");
-	if (setsockopt(sndsock, SOL_SOCKET, SO_SNDBUF, (char *)&packlen,
-	    sizeof(packlen)) < 0) {
+	if (setsockopt(sndsock, SOL_SOCKET, SO_SNDBUF, (char *)&packlen, sizeof(packlen)) < 0) {
 		Fprintf(stderr, "%s: SO_SNDBUF: %s\n", prog, strerror(errno));
 		exit(1);
 	}
 #endif
 #ifdef IP_HDRINCL
 	Fprintf(stderr, "we set HDRINCL\n");
-	if (setsockopt(sndsock, IPPROTO_IP, IP_HDRINCL, (char *)&on,
-	    sizeof(on)) < 0) {
+	if (setsockopt(sndsock, IPPROTO_IP, IP_HDRINCL, (char *)&on, sizeof(on)) < 0) {
 		Fprintf(stderr, "%s: IP_HDRINCL: %s\n", prog, strerror(errno));
 		exit(1);
 	}
 #endif
-	if (options & SO_DEBUG)
-		(void)setsockopt(sndsock, SOL_SOCKET, SO_DEBUG, (char *)&on,
-		    sizeof(on));
-	if (options & SO_DONTROUTE)
-		(void)setsockopt(sndsock, SOL_SOCKET, SO_DONTROUTE, (char *)&on,
-		    sizeof(on));
 
 	/* Get the interface address list */
 	n = ifaddrlist(&al, errbuf);
@@ -556,8 +329,7 @@ main(int argc, char **argv)
 			if (strcmp(device, al->device) == 0)
 				break;
 		if (i <= 0) {
-			Fprintf(stderr, "%s: Can't find interface %.32s\n",
-			    prog, device);
+			Fprintf(stderr, "%s: Can't find interface %.32s\n", prog, device);
 			exit(1);
 		}
 	}
@@ -571,8 +343,7 @@ main(int argc, char **argv)
 		if (device != NULL)
 			setsin(from, al->addr);
 		else if ((err = findsaddr(to, from)) != NULL) {
-			Fprintf(stderr, "%s: findsaddr: %s\n",
-			    prog, err);
+			Fprintf(stderr, "%s: findsaddr: %s\n", prog, err);
 			exit(1);
 		}
 	} else {
@@ -590,9 +361,7 @@ main(int argc, char **argv)
 				if (*ap == al->addr)
 					break;
 			if (i <= 0) {
-				Fprintf(stderr,
-				    "%s: %s is not on interface %.32s\n",
-				    prog, source, device);
+				Fprintf(stderr, "%s: %s is not on interface %.32s\n", prog, source, device);
 				exit(1);
 			}
 			setsin(from, *ap);
@@ -600,8 +369,7 @@ main(int argc, char **argv)
 			setsin(from, hi->addrs[0]);
 			if (hi->n > 1)
 				Fprintf(stderr,
-			"%s: Warning: %s has multiple addresses; using %s\n",
-				    prog, source, inet_ntoa(from->sin_addr));
+			"%s: Warning: %s has multiple addresses; using %s\n", prog, source, inet_ntoa(from->sin_addr));
 		}
 		freehostinfo(hi);
 	}
@@ -665,39 +433,30 @@ send_probe(register int seq, int ttl, register struct timeval *tp)
 	 * But we must do it anyway so that the udp checksum comes out
 	 * right.
 	 */
-	if (doipcksum) {
-		outip->ip_sum =
-		    in_cksum((u_short *)outip, sizeof(*outip) + optlen);
-		if (outip->ip_sum == 0)
-			outip->ip_sum = 0xffff;
-	}
+	outip->ip_sum = in_cksum((u_short *)outip, sizeof(*outip));
+	if (outip->ip_sum == 0)
+		outip->ip_sum = 0xffff;
 
-	/* Payload 
-	outdata->seq = seq;
-	outdata->ttl = ttl;
-	outdata->tv = *tp;
-	*/
 	strncpy(outdata->new, "this is my payload datas", 24);
 
 	outudp->uh_dport = htons(port + seq);
 
-	if (doipcksum) {
-		/* Checksum (we must save and restore ip header) */
-		tip = *outip;
-		ui = (struct udpiphdr *)outip;
-		oui = (struct udpiphdr *)&tip;
-		/* Easier to zero and put back things that are ok */
-		memset((char *)ui, 0, sizeof(ui->ui_i));
-		ui->ui_src = oui->ui_src;
-		ui->ui_dst = oui->ui_dst;
-		ui->ui_pr = oui->ui_pr;
-		ui->ui_len = outudp->uh_ulen;
-		outudp->uh_sum = 0;
-		outudp->uh_sum = in_cksum((u_short *)ui, packlen);
-		if (outudp->uh_sum == 0)
-			outudp->uh_sum = 0xffff;
-		*outip = tip;
-	}
+	/* Checksum (we must save and restore ip header) */
+	tip = *outip;
+	ui = (struct udpiphdr *)outip;
+	oui = (struct udpiphdr *)&tip;
+
+	/* Easier to zero and put back things that are ok */
+	memset((char *)ui, 0, sizeof(ui->ui_i));
+	ui->ui_src = oui->ui_src;
+	ui->ui_dst = oui->ui_dst;
+	ui->ui_pr = oui->ui_pr;
+	ui->ui_len = outudp->uh_ulen;
+	outudp->uh_sum = 0;
+	outudp->uh_sum = in_cksum((u_short *)ui, packlen);
+	if (outudp->uh_sum == 0)
+		outudp->uh_sum = 0xffff;
+	*outip = tip;
 
 	/* XXX undocumented debugging hack */
 	if (verbose > 1) {
@@ -733,10 +492,8 @@ send_probe(register int seq, int ttl, register struct timeval *tp)
 	cc = sendto(sndsock, (char *)outip, packlen, 0, &whereto, sizeof(whereto));
 	if (cc < 0 || cc != packlen)  {
 		if (cc < 0)
-			Fprintf(stderr, "%s: sendto: %s\n",
-			    prog, strerror(errno));
-		Printf("%s: wrote %s %d chars, ret=%d\n",
-		    prog, hostname, packlen, cc);
+			Fprintf(stderr, "%s: sendto: %s\n", prog, strerror(errno));
+		Printf("%s: wrote %s %d chars, ret=%d\n", prog, hostname, packlen, cc);
 		(void)fflush(stdout);
 	}
 }
@@ -787,8 +544,7 @@ gethostinfo(register char *hostname)
 	register u_int32_t addr, *ap;
 
 	if (strlen(hostname) > 64) {
-		Fprintf(stderr, "%s: hostname \"%.32s...\" is too long\n",
-		    prog, hostname);
+		Fprintf(stderr, "%s: hostname \"%.32s...\" is too long\n", prog, hostname);
 		exit(1);
 	}
 	hi = calloc(1, sizeof(*hi));
@@ -802,8 +558,7 @@ gethostinfo(register char *hostname)
 		hi->n = 1;
 		hi->addrs = calloc(1, sizeof(hi->addrs[0]));
 		if (hi->addrs == NULL) {
-			Fprintf(stderr, "%s: calloc %s\n",
-			    prog, strerror(errno));
+			Fprintf(stderr, "%s: calloc %s\n", prog, strerror(errno));
 			exit(1);
 		}
 		hi->addrs[0] = addr;
@@ -868,20 +623,20 @@ str2val(register const char *str, register const char *what,
 	if (str[0] == '0' && (str[1] == 'x' || str[1] == 'X')) {
 		cp = str + 2;
 		val = (int)strtol(cp, &ep, 16);
-	} else
+	} else {
 		val = (int)strtol(str, &ep, 10);
+	}
+
 	if (*ep != '\0') {
-		Fprintf(stderr, "%s: \"%s\" bad value for %s \n",
-		    prog, str, what);
+		Fprintf(stderr, "%s: \"%s\" bad value for %s \n", prog, str, what);
 		exit(1);
 	}
 	if (val < mi && mi >= 0) {
-		if (mi == 0)
-			Fprintf(stderr, "%s: %s must be >= %d\n",
-			    prog, what, mi);
-		else
-			Fprintf(stderr, "%s: %s must be > %d\n",
-			    prog, what, mi - 1);
+		if (mi == 0) {
+			Fprintf(stderr, "%s: %s must be >= %d\n", prog, what, mi);
+		} else {
+			Fprintf(stderr, "%s: %s must be > %d\n", prog, what, mi - 1);
+		}
 		exit(1);
 	}
 	if (val > ma && ma >= 0) {
@@ -898,8 +653,7 @@ usage(void)
 
 	Fprintf(stderr, "Version %s\n", version);
 	Fprintf(stderr,
-	    "Usage: %s [-dFnrvx] [-g gateway] [-i iface] [-f first_ttl]\n"
-	    "\t[-m max_ttl] [ -p port] [-s src_addr]\n"
+	    "Usage: %s [-nv] [-i iface] [ -p port] [-s src_addr]\n"
 	    "\thost [packetlen]\n", prog);
 	exit(1);
 }

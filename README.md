@@ -4,21 +4,23 @@ A little project to illustrate how `SOCK_RAW` sockets work on various operating 
 All testing has been done on an x86_64/little endian architecture.
 
 The C code is a simplified version of [traceroute](
-ftp://ftp.ee.lbl.gov/traceroute-1.4a12.tar.gz).
+ftp://ftp.ee.lbl.gov/traceroute-1.4a12.tar.gz) and basically does:
 
 ```C
 int s;
 char [XXX]packet = {0x45, ...}; // IPv4 header and above
 int pktlen = XXX;
-int on = 1;
 
 s = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
 setsockopt(s, SOL_SOCKET, SO_SNDBUF, (char *)&pktlen, sizeof(pktlen));
+
+int on = 1;
 setsockopt(s, IPPROTO_IP, IP_HDRINCL, (char *)&on, sizeof(on));
+
 struct sockaddr_in whereto;
 whereto.sin_len = sizeof(struct sockaddr_in);
 whereto.sin_family = AF_INET;
-whereto.sin_addr.s_addr = inet_aton("x.x.x.x");
+whereto.sin_addr.s_addr = inet_aton("x.x.x.x"); // destination IP
 
 sendto(s, (char *)packet, packetlen, 0, &whereto, sizeof(whereto));
 ```
