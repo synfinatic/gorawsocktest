@@ -43,6 +43,7 @@ The TCP/UDP header lengths should still be in _network byte order_.
 
 * Can send UDP datagrams with our IP
 * Can send UDP datagrams with a spoofed IP
+* Can _not_ send UDP datagrams with an IP Header Length = 0
 
 ### GoLang
 * Can _NOT_ send UDP datagrams at all

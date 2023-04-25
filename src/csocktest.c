@@ -19,13 +19,6 @@
  * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  */
 
-#ifndef lint
-static const char copyright[] =
-    "@(#) Copyright (c) 1988, 1989, 1991, 1994, 1995, 1996, 1997, 1998, 1999, 2000\n\
-The Regents of the University of California.  All rights reserved.\n";
-static const char rcsid[] =
-    "@(#)$Id: traceroute.c,v 1.68 2000/12/14 08:04:33 leres Exp $ (LBL)";
-#endif
 
 #include <sys/param.h>
 #include <sys/file.h>
@@ -141,6 +134,8 @@ __dead	void usage(void);
 int	usleep(u_int);
 #endif
 
+int zeroIPLen = 0;
+
 int
 main(int argc, char **argv)
 {
@@ -170,7 +165,7 @@ main(int argc, char **argv)
 	}
 
 	opterr = 0;
-	while ((op = getopt(argc, argv, "nvI:i:p:s:")) != EOF) {
+	while ((op = getopt(argc, argv, "nvzI:i:p:s:")) != EOF) {
 		switch (op) {
 
 		case 'I':
@@ -200,6 +195,10 @@ main(int argc, char **argv)
 
 		case 'v':
 			++verbose;
+			break;
+
+		case 'z':
+			zeroIPLen = 1;
 			break;
 
 		default:
@@ -258,6 +257,11 @@ main(int argc, char **argv)
 	outip->ip_len = packlen;
 	outip->ip_off = off;
 #endif
+
+	if (zeroIPLen) {
+		outip->ip_len = 0;
+	}
+
 	outp = (u_char *)(outip + 1);
 	outip->ip_dst = to->sin_addr;
 
@@ -272,12 +276,6 @@ main(int argc, char **argv)
 	outudp->uh_ulen = htons((u_short)(packlen - (sizeof(*outip))));
 	outdata = (union outdata *)(outudp + 1);
 
-	cp = "icmp";
-	if ((pe = getprotobyname(cp)) == NULL) {
-		Fprintf(stderr, "%s: unknown protocol %s\n", prog, cp);
-		exit(1);
-	}
-
 	/* Insure the socket fds won't be 0, 1 or 2 */
 	if (open(devnull, O_RDONLY) < 0 ||
 	    open(devnull, O_RDONLY) < 0 ||
@@ -285,11 +283,8 @@ main(int argc, char **argv)
 		Fprintf(stderr, "%s: open \"%s\": %s\n", prog, devnull, strerror(errno));
 		exit(1);
 	}
-	if ((s = socket(AF_INET, SOCK_RAW, pe->p_proto)) < 0) {
-		Fprintf(stderr, "%s: icmp socket: %s\n", prog, strerror(errno));
-		exit(1);
-	}
 
+	// open our SOCK_RAW
 	sndsock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
 	if (sndsock < 0) {
 		Fprintf(stderr, "%s: raw socket: %s\n", prog, strerror(errno));
@@ -340,9 +335,9 @@ main(int argc, char **argv)
 		 * If a device was specified, use the interface address.
 		 * Otherwise, try to determine our source address.
 		 */
-		if (device != NULL)
+		if (device != NULL) {
 			setsin(from, al->addr);
-		else if ((err = findsaddr(to, from)) != NULL) {
+		} else if ((err = findsaddr(to, from)) != NULL) {
 			Fprintf(stderr, "%s: findsaddr: %s\n", prog, err);
 			exit(1);
 		}
@@ -380,6 +375,7 @@ main(int argc, char **argv)
 
 	outip->ip_src = from->sin_addr;
 #ifndef IP_HDRINCL
+	Fprintf(stderr, "we bind socket to %s\n", inet_ntoa(from->sin_addr));
 	if (bind(sndsock, (struct sockaddr *)from, sizeof(*from)) < 0) {
 		Fprintf(stderr, "%s: bind: %s\n",
 		    prog, strerror(errno));
@@ -387,34 +383,23 @@ main(int argc, char **argv)
 	}
 #endif
 
-	Fprintf(stderr, "%s to %s (%s)",
-	    prog, hostname, inet_ntoa(to->sin_addr));
-	if (source)
+	Fprintf(stderr, "%s to %s (%s)", prog, hostname, inet_ntoa(to->sin_addr));
+	if (source) {
 		Fprintf(stderr, " from %s", source);
-	Fprintf(stderr, ", %d hops max, %d byte packets\n", max_ttl, packlen);
+	}
+	Fprintf(stderr, ", %d byte packets\n", packlen);
 	(void)fflush(stderr);
 
-	for (ttl = first_ttl; ttl <= max_ttl; ++ttl) {
-		u_int32_t lastaddr = 0;
-		int gotlastaddr = 0;
-		int got_there = 0;
-		int unreachable = 0;
-		int sentfirst = 0;
 
-		for (probe = 0; probe < 3; ++probe) {
-			register int cc;
-			struct timeval t1, t2;
-			struct timezone tz;
-			register struct ip *ip;
+	for (probe = 0; probe < 3; ++probe) {
+		struct timeval t1, t2;
+		struct timezone tz;
 
-			(void)gettimeofday(&t1, &tz);
-			send_probe(++seq, ttl, &t1);
-			++sentfirst;
-			(void)fflush(stdout);
-		}
-		putchar('\n');
-		break;
+		(void)gettimeofday(&t1, &tz);
+		send_probe(++seq, ttl, &t1);
+		(void)fflush(stdout);
 	}
+	putchar('\n');
 	exit(0);
 }
 
@@ -481,6 +466,7 @@ send_probe(register int seq, int ttl, register struct timeval *tp)
 	}
 
 #if !defined(IP_HDRINCL) && defined(IP_TTL)
+	Fprintf(stderr, "we set setsockopt ttl\n");
 	if (setsockopt(sndsock, IPPROTO_IP, IP_TTL,
 	    (char *)&ttl, sizeof(ttl)) < 0) {
 		Fprintf(stderr, "%s: setsockopt ttl %d: %s\n",
@@ -491,8 +477,9 @@ send_probe(register int seq, int ttl, register struct timeval *tp)
 
 	cc = sendto(sndsock, (char *)outip, packlen, 0, &whereto, sizeof(whereto));
 	if (cc < 0 || cc != packlen)  {
-		if (cc < 0)
+		if (cc < 0) {
 			Fprintf(stderr, "%s: sendto: %s\n", prog, strerror(errno));
+		}
 		Printf("%s: wrote %s %d chars, ret=%d\n", prog, hostname, packlen, cc);
 		(void)fflush(stdout);
 	}
@@ -649,11 +636,8 @@ str2val(register const char *str, register const char *what,
 __dead void
 usage(void)
 {
-	extern char version[];
-
-	Fprintf(stderr, "Version %s\n", version);
 	Fprintf(stderr,
-	    "Usage: %s [-nv] [-i iface] [ -p port] [-s src_addr]\n"
+	    "Usage: %s [-nvz] [-i iface] [ -p port] [-s src_addr]\n"
 	    "\thost [packetlen]\n", prog);
 	exit(1);
 }

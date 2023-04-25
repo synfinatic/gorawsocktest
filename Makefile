@@ -10,11 +10,11 @@ dist:
 
 rawsocktest: dist/rawsocktest
 
-dist/rawsocktest: cmd/rawsocktest/*.go pkg/rawlayers/*.go
+dist/rawsocktest: $(wildcard cmd/rawsocktest/*.go) $(wildcard pkg/rawlayers/*.go)
 	go build -o dist/rawsocktest ./cmd/rawsocktest/...
 
 csocktest: dist/csocktest
 
-dist/csocktest: src/*
+dist/csocktest: $(wildcard src/*.[ch])
 	cd src && make
 	cp src/csocktest dist/

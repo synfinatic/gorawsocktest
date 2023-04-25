@@ -22,6 +22,7 @@ type CLI struct {
 	SrcPort   uint16 `kong:"short='S',help='UDP source port',default='5555'"`
 	DstPort   uint16 `kong:"short='D',help='UDP destination port',default='6666'"`
 	Payload   string `kong:"short='p',help='UDP payload',default='this is my payload datas'"`
+	ZeroLen   bool   `kong:"short='z',help='Pass 0 as the length to the kernel'"`
 }
 
 var log *logrus.Logger
@@ -48,8 +49,8 @@ func main() {
 	udp := &rawlayers.UDP{
 		SrcPort:  layers.UDPPort(cli.SrcPort),
 		DstPort:  layers.UDPPort(cli.DstPort),
-		Length:   0, // binary.BigEndian.Uint16(ulen), // calculated
-		Checksum: 0, // calculated
+		Length:   0x20, // binary.BigEndian.Uint16(ulen), // calculated
+		Checksum: 0,    // calculated
 	}
 
 	srcIP := net.ParseIP(cli.SrcIP)
@@ -74,7 +75,7 @@ func main() {
 	udp.SetNetworkLayerForChecksum(ip4)
 
 	opts := gopacket.SerializeOptions{
-		FixLengths:       true,
+		FixLengths:       !cli.ZeroLen,
 		ComputeChecksums: true,
 	}
 
