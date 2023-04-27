@@ -131,9 +131,10 @@ int ttl = 10;
 u_short ident = 0x1234;
 u_int16_t srcPort = 5555; // -S
 u_int16_t  dstPort = 6666; // -D
+int bufSize = -1;
+int count = 3;
 char *device = NULL; // -i, optional
 char *payload = "this is my payload datas"; // -p
-int verbose = 2; // -v
 
 
 int
@@ -164,8 +165,15 @@ main(int argc, char **argv)
 	}
 
 	opterr = 0;
-	while ((op = getopt(argc, argv, "nzi:d:D:s:S:p:")) != EOF) {
+	while ((op = getopt(argc, argv, "nzb:c:i:d:D:s:S:p:")) != EOF) {
 		switch (op) {
+		case 'b': // bufsize
+			bufSize = str2val(optarg, "bufsize", 1, (1 << 16) -1);
+			break;
+
+		case 'c': // count
+			count = str2val(optarg, "count", 1, (1 << 16) -1);
+			break;
 
 		case 'i': // interface
 			device = optarg;
@@ -250,7 +258,6 @@ main(int argc, char **argv)
 	outip->ip_dst = to->sin_addr;
 
 	outip->ip_hl = (outp - (u_char *)outip) >> 2;
-	ident = 0x1234;
 	outip->ip_p = IPPROTO_UDP;
 
 	outudp = (struct udphdr *)outp;
@@ -275,7 +282,9 @@ main(int argc, char **argv)
 
 #ifdef SO_SNDBUF
 	Fprintf(stderr, "we set SNDBUF\n");
-	if (setsockopt(sndsock, SOL_SOCKET, SO_SNDBUF, (char *)&packlen, sizeof(packlen)) < 0) {
+	if (bufSize < 0)
+		bufSize = packlen; 
+	if (setsockopt(sndsock, SOL_SOCKET, SO_SNDBUF, (char *)&bufSize, sizeof(bufSize)) < 0) {
 		Fprintf(stderr, "%s: SO_SNDBUF: %s\n", prog, strerror(errno));
 		exit(1);
 	}
@@ -366,7 +375,9 @@ main(int argc, char **argv)
 #endif
 
 	Fprintf(stderr, "%s:%d -> %s:%d\n", srcIP, srcPort, dstIP, dstPort);
-	send_probe();
+	for (int i = 0; i < count; i++)
+		send_probe();
+	close(sndsock);
 	exit(0);
 }
 
@@ -411,26 +422,24 @@ send_probe()
 	*outip = tip;
 
 	/* XXX undocumented debugging hack */
-	if (verbose > 1) {
-		register const u_short *sp;
-		register int nshorts, i;
+	register const u_short *sp;
+	register int nshorts, i;
 
-		sp = (u_short *)outip;
-		nshorts = (u_int)packlen / sizeof(u_short);
-		i = 0;
-		Printf("[ %d bytes", packlen);
-		while (--nshorts >= 0) {
-			if ((i++ % 8) == 0)
-				Printf("\n\t");
-			Printf(" %04x", ntohs(*sp++));
-		}
-		if (packlen & 1) {
-			if ((i % 8) == 0)
-				Printf("\n\t");
-			Printf(" %02x", *(u_char *)sp);
-		}
-		Printf("]\n");
+	sp = (u_short *)outip;
+	nshorts = (u_int)packlen / sizeof(u_short);
+	i = 0;
+	Printf("[ %d bytes", packlen);
+	while (--nshorts >= 0) {
+		if ((i++ % 8) == 0)
+			Printf("\n\t");
+		Printf(" %04x", ntohs(*sp++));
 	}
+	if (packlen & 1) {
+		if ((i % 8) == 0)
+			Printf("\n\t");
+		Printf(" %02x", *(u_char *)sp);
+	}
+	Printf("]\n");
 
 #if !defined(IP_HDRINCL) && defined(IP_TTL)
 	Fprintf(stderr, "we set setsockopt ttl\n");
@@ -604,7 +613,7 @@ __dead void
 usage(void)
 {
 	Fprintf(stderr,
-	    "Usage: %s [-nvz] [-i iface] [-s srcIP] [-S srcPort] -d dstIP [-D dstPort]\n"
-	    "\t[-p payload]\n", prog);
+	    "Usage: %s [-nvz] [-b bufSize] [-c count] [-i iface] [-s srcIP] [-S srcPort] [-D dstPort]\n"
+	    "\t[-p payload] -d dstIP\n", prog);
 	exit(1);
 }
