@@ -65,7 +65,7 @@ func main() {
 		Id:         0x1234,
 		Flags:      0,
 		FragOffset: 0,
-		TTL:        1,
+		TTL:        10,
 		Protocol:   layers.IPProtocolUDP,
 		Checksum:   0, // calculated
 		SrcIP:      srcIP,

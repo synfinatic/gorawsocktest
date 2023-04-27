@@ -411,7 +411,7 @@ send_probe(register int seq, int ttl, register struct timeval *tp)
 	struct ip tip;
 
 	outip->ip_ttl = ttl;
-	outip->ip_id = htons(ident + seq);
+	outip->ip_id = htons(ident);
 
 	/*
 	 * In most cases, the kernel will recalculate the ip checksum.
