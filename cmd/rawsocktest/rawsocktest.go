@@ -15,6 +15,8 @@ import (
 )
 
 type CLI struct {
+	BufSize   int    `kong:"short='b',help='Override SO_SNDBUF size',default=-1"`
+	Count     int    `kong:"short='c',help='Number of packets to send',default=3"`
 	NoRoute   bool   `kong:"short='n',help='Tell the kernel to bypass routing table'"`
 	Interface string `kong:"short='i',help='Interface to bind to'"`
 	SrcIP     string `kong:"short='s',help='Source IP',default='172.16.1.162'"`
@@ -84,8 +86,6 @@ func main() {
 		log.WithError(err).Fatalf("unable to serialize")
 	}
 	b := buffer.Bytes()
-	bufLen := len(b)
-
 	printPacket(b)
 
 	var s int
@@ -93,6 +93,12 @@ func main() {
 	if s, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_RAW); err != nil {
 		log.WithError(err).Fatalf("unable to open socket")
 	}
+
+	bufLen := len(b)
+	if cli.BufSize > -1 {
+		bufLen = cli.BufSize
+	}
+	log.Infof("Setting SO_SNDBUF to %d bytes", bufLen)
 
 	// set send buffer size
 	if err = syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_SNDBUF, bufLen); err != nil {
@@ -125,12 +131,15 @@ func main() {
 		// Port: ???,
 		Addr: [4]byte{dstIP[0], dstIP[1], dstIP[2], dstIP[3]},
 	}
-	bufLen, err = syscall.SendmsgN(s, b, []byte{}, &addr, 0)
-	if err != nil {
-		log.WithError(err).Fatalf("sendto")
-	}
+	for i := 0; i < cli.Count; i++ {
+		bufLen, err = syscall.SendmsgN(s, b, []byte{}, &addr, 0)
+		if err != nil {
+			log.WithError(err).Fatalf("sendto")
+		}
 
-	log.Infof("Sent %d bytes to %s:%d", bufLen, cli.DstIP, cli.DstPort)
+		log.Infof("Sent %d bytes to %s:%d", bufLen, cli.DstIP, cli.DstPort)
+	}
+	syscall.Close(s)
 }
 
 func printPacket(b []byte) {

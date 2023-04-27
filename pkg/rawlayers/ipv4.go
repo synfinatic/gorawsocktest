@@ -120,7 +120,6 @@ func (ip *IPv4) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.SerializeO
 		binary.BigEndian.PutUint16(bytes[2:], ip.Length)
 	case "darwin":
 		endian().PutUint16(bytes[2:], ip.Length)
-		fmt.Printf("ip.length = 0x%04x\n", bytes[2:3])
 	default:
 		return errors.New("unsupported OS for IPv4.Length")
 	}
