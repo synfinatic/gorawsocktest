@@ -84,7 +84,7 @@ struct old_outdata {
 /* Data section of the probe packet */
 union outdata {
 	struct old_outdata old;
-	char new[24];
+	char new[512];
 };
 
 u_char	packet[512];		/* last inbound (icmp) packet */
@@ -100,23 +100,11 @@ int sndsock;			/* send (udp/icmp) socket file descriptor */
 struct sockaddr whereto;	/* Who to try to reach */
 struct sockaddr wherefrom;	/* Who we are */
 int packlen;			/* total length of packet */
-int minpacket;			/* min ip packet size */
-int maxpacket = 32 * 1024;	/* max ip packet size */
 int pmtu;			/* Path MTU Discovery (RFC1191) */
 
-char *prog;
-char *source;
-char *hostname;
-char *device;
 static const char devnull[] = "/dev/null";
 
-int max_ttl = 30;
-int first_ttl = 15;
-u_short ident;
-u_short port = 32768 + 666;	/* start udp dest port # for probe packets */
 
-int verbose;
-int nflag;			/* print addresses numerically */
 
 extern int optind;
 extern int opterr;
@@ -126,15 +114,27 @@ extern char *optarg;
 void	freehostinfo(struct hostinfo *);
 struct	hostinfo *gethostinfo(char *);
 u_short	in_cksum(u_short *, int);
-int	main(int, char **);
-void	send_probe(int, int, struct timeval *);
+void	send_probe();
 int	str2val(const char *, const char *, int, int);
 __dead	void usage(void);
 #ifndef HAVE_USLEEP
 int	usleep(u_int);
 #endif
 
-int zeroIPLen = 0;
+char *prog;
+
+int zeroIPLen = 0; // -z
+int noRoute = 0; // -n
+char *srcIP = "172.16.1.162";
+char *dstIP = NULL; // required
+int ttl = 10;
+u_short ident = 0x1234;
+u_int16_t srcPort = 5555; // -S
+u_int16_t  dstPort = 6666; // -D
+char *device = NULL; // -i, optional
+char *payload = "this is my payload datas"; // -p
+int verbose = 2; // -v
+
 
 int
 main(int argc, char **argv)
@@ -152,7 +152,6 @@ main(int argc, char **argv)
 	register int ttl, probe, i;
 	register int seq = 0;
 	register int lsrr = 0;
-	register u_short off = 0;
 	struct ifaddrlist *al;
 	char errbuf[132];
 
@@ -165,74 +164,59 @@ main(int argc, char **argv)
 	}
 
 	opterr = 0;
-	while ((op = getopt(argc, argv, "nvzI:i:p:s:")) != EOF) {
+	while ((op = getopt(argc, argv, "nzi:d:D:s:S:p:")) != EOF) {
 		switch (op) {
 
-		case 'I':
-			ident = (u_short)str2val(optarg, "ip id", 1, 65535);
-			Fprintf(stderr, "using ip id: 0x%04x\n", ident);
-			break;
-
-		case 'i':
+		case 'i': // interface
 			device = optarg;
 			break;
 
-		case 'n':
-			++nflag;
+		case 'n': // bypass routing table
+			noRoute = 1;
 			break;
 
-		case 'p':
-			port = (u_short)str2val(optarg, "port", 1, (1 << 16) - 1);
+		case 'D': // dest port
+			dstPort = (u_short)str2val(optarg, "dstPort", 1, (1 << 16) - 1);
 			break;
 
-		case 's':
-			/*
-			 * set the ip source address of the outbound
-			 * probe (e.g., on a multi-homed host).
-			 */
-			source = optarg;
+		case 'S': // source port
+			srcPort = (u_short)str2val(optarg, "srcPort", 1, (1 << 16) - 1);
 			break;
 
-		case 'v':
-			++verbose;
+		case 'd': // dest IP
+			dstIP = optarg;
 			break;
 
-		case 'z':
+		case 's': // source IP
+			srcIP = optarg;
+			break;
+
+		case 'z': // set IP.Length = 0
 			zeroIPLen = 1;
 			break;
+
+		case 'p': // payload
+			payload = optarg;
+			break; 
 
 		default:
 			usage();
 		}
 	}
 
-	minpacket = sizeof(*outip) + sizeof(outdata->new);
-	minpacket += sizeof(*outudp);
-	packlen = minpacket;			/* minimum sized packet */
+	packlen = 20 + 8 + strlen(payload);			/* minimum sized packet */
 
-	/* Process destination and optional packet size */
-	switch (argc - optind) {
-
-	case 2:
-		packlen = str2val(argv[optind + 1], "packet length", minpacket, maxpacket);
-		/* Fall through */
-
-	case 1:
-		hostname = argv[optind];
-		hi = gethostinfo(hostname);
-		setsin(to, hi->addrs[0]);
-		if (hi->n > 1) {
-			Fprintf(stderr, "%s: Warning: %s has multiple addresses; using %s\n",
-				prog, hostname, inet_ntoa(to->sin_addr));
-		}
-		hostname = hi->name;
-		hi->name = NULL;
-		freehostinfo(hi);
-		break;
-
-	default:
-		usage();
+	if (dstIP == NULL) {
+		Fprintf(stderr, "Missing required -d <dstIP>\n");
+		exit(-1);
 	}
+
+	struct in_addr ipaddr;
+	inet_aton(dstIP, &ipaddr);
+	setsin(to, ipaddr.s_addr);
+	inet_aton(srcIP, &ipaddr);
+	setsin(from, ipaddr.s_addr);
+
 
 #ifdef HAVE_SETLINEBUF
 	setlinebuf (stdout);
@@ -251,11 +235,11 @@ main(int argc, char **argv)
 #ifdef BYTESWAP_IP_HDR
 	Fprintf(stderr, "we are using network byte order for IP len/off\n");
 	outip->ip_len = htons(packlen);
-	outip->ip_off = htons(off);
+	outip->ip_off = htons(0);
 #else
 	Fprintf(stderr, "we are using host byte order for IP len/off\n");
 	outip->ip_len = packlen;
-	outip->ip_off = off;
+	outip->ip_off = 0;
 #endif
 
 	if (zeroIPLen) {
@@ -266,13 +250,11 @@ main(int argc, char **argv)
 	outip->ip_dst = to->sin_addr;
 
 	outip->ip_hl = (outp - (u_char *)outip) >> 2;
-	if (0 == ident) {
-		ident = (getpid() & 0xffff) | 0x8000;
-	}
+	ident = 0x1234;
 	outip->ip_p = IPPROTO_UDP;
 
 	outudp = (struct udphdr *)outp;
-	outudp->uh_sport = htons(ident);
+	outudp->uh_sport = htons(srcPort);
 	outudp->uh_ulen = htons((u_short)(packlen - (sizeof(*outip))));
 	outdata = (union outdata *)(outudp + 1);
 
@@ -330,7 +312,7 @@ main(int argc, char **argv)
 	}
 
 	/* Determine our source address */
-	if (source == NULL) {
+	if (srcIP == NULL) {
 		/*
 		 * If a device was specified, use the interface address.
 		 * Otherwise, try to determine our source address.
@@ -342,8 +324,8 @@ main(int argc, char **argv)
 			exit(1);
 		}
 	} else {
-		hi = gethostinfo(source);
-		source = hi->name;
+		hi = gethostinfo(srcIP);
+		srcIP = hi->name;
 		hi->name = NULL;
 		/*
 		 * If the device was specified make sure it
@@ -356,7 +338,7 @@ main(int argc, char **argv)
 				if (*ap == al->addr)
 					break;
 			if (i <= 0) {
-				Fprintf(stderr, "%s: %s is not on interface %.32s\n", prog, source, device);
+				Fprintf(stderr, "%s: %s is not on interface %.32s\n", prog, srcIP, device);
 				exit(1);
 			}
 			setsin(from, *ap);
@@ -364,7 +346,7 @@ main(int argc, char **argv)
 			setsin(from, hi->addrs[0]);
 			if (hi->n > 1)
 				Fprintf(stderr,
-			"%s: Warning: %s has multiple addresses; using %s\n", prog, source, inet_ntoa(from->sin_addr));
+			"%s: Warning: %s has multiple addresses; using %s\n", prog, srcIP, inet_ntoa(from->sin_addr));
 		}
 		freehostinfo(hi);
 	}
@@ -383,28 +365,13 @@ main(int argc, char **argv)
 	}
 #endif
 
-	Fprintf(stderr, "%s to %s (%s)", prog, hostname, inet_ntoa(to->sin_addr));
-	if (source) {
-		Fprintf(stderr, " from %s", source);
-	}
-	Fprintf(stderr, ", %d byte packets\n", packlen);
-	(void)fflush(stderr);
-
-
-	for (probe = 0; probe < 3; ++probe) {
-		struct timeval t1, t2;
-		struct timezone tz;
-
-		(void)gettimeofday(&t1, &tz);
-		send_probe(++seq, ttl, &t1);
-		(void)fflush(stdout);
-	}
-	putchar('\n');
+	Fprintf(stderr, "%s:%d -> %s:%d\n", srcIP, srcPort, dstIP, dstPort);
+	send_probe();
 	exit(0);
 }
 
 void
-send_probe(register int seq, int ttl, register struct timeval *tp)
+send_probe()
 {
 	register int cc;
 	register struct udpiphdr *ui, *oui;
@@ -422,9 +389,9 @@ send_probe(register int seq, int ttl, register struct timeval *tp)
 	if (outip->ip_sum == 0)
 		outip->ip_sum = 0xffff;
 
-	strncpy(outdata->new, "this is my payload datas", 24);
+	strncpy(outdata->new, payload, strlen(payload));
 
-	outudp->uh_dport = htons(port + seq);
+	outudp->uh_dport = htons(dstPort);
 
 	/* Checksum (we must save and restore ip header) */
 	tip = *outip;
@@ -480,7 +447,7 @@ send_probe(register int seq, int ttl, register struct timeval *tp)
 		if (cc < 0) {
 			Fprintf(stderr, "%s: sendto: %s\n", prog, strerror(errno));
 		}
-		Printf("%s: wrote %s %d chars, ret=%d\n", prog, hostname, packlen, cc);
+		Printf("%s: wrote %s %d chars, ret=%d\n", prog, dstIP, packlen, cc);
 		(void)fflush(stdout);
 	}
 }
@@ -637,7 +604,7 @@ __dead void
 usage(void)
 {
 	Fprintf(stderr,
-	    "Usage: %s [-nvz] [-i iface] [ -p port] [-s src_addr]\n"
-	    "\thost [packetlen]\n", prog);
+	    "Usage: %s [-nvz] [-i iface] [-s srcIP] [-S srcPort] -d dstIP [-D dstPort]\n"
+	    "\t[-p payload]\n", prog);
 	exit(1);
 }
