@@ -15,8 +15,8 @@ import (
 )
 
 type CLI struct {
-	BufSize   int    `kong:"short='b',help='Override SO_SNDBUF size',default=-1"`
-	Count     int    `kong:"short='c',help='Number of packets to send',default=3"`
+	BufSize   int    `kong:"short='b',help='Override SO_SNDBUF size. 0 = do not set.',default=-1"`
+	Count     int    `kong:"short='c',help='Number of packets to send',default=1"`
 	NoRoute   bool   `kong:"short='n',help='Tell the kernel to bypass routing table'"`
 	Interface string `kong:"short='i',help='Interface to bind to'"`
 	SrcIP     string `kong:"short='s',help='Source IP',default='172.16.1.162'"`
@@ -94,21 +94,29 @@ func main() {
 		log.WithError(err).Fatalf("unable to open socket")
 	}
 
+	/*
+	 * cli.BufSize < 0: auto-calculate based on packet size
+	 * cli.BufSize == 0: do not set SO_SNDBUF at all
+	 * cli.BufSize > 0: explicitly set SO_SNDBUF size
+	 */
 	bufLen := len(b)
 	if cli.BufSize > -1 {
 		bufLen = cli.BufSize
 	}
-	log.Infof("Setting SO_SNDBUF to %d bytes", bufLen)
+	if bufLen != 0 {
+		log.Infof("Setting SO_SNDBUF to %d bytes", bufLen)
 
-	// set send buffer size
-	if err = syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_SNDBUF, bufLen); err != nil {
-		log.WithError(err).Fatalf("unable to SNDBUF")
+		// set send buffer size
+		if err = syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_SNDBUF, bufLen); err != nil {
+			log.WithError(err).Fatalf("unable to SNDBUF")
+		}
 	}
 
 	// we will provide the IP header
 	if err = syscall.SetsockoptInt(s, syscall.IPPROTO_IP, syscall.IP_HDRINCL, 1); err != nil {
 		log.WithError(err).Fatalf("unable to IP_HDRINCL")
 	}
+
 	// bypass routing table?
 	if cli.NoRoute {
 		if err = syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_DONTROUTE, 1); err != nil {
@@ -116,11 +124,11 @@ func main() {
 		}
 	}
 
-	// bind to a specific interface
+	// bind to a specific interface?
 	if cli.Interface != "" {
 		iface, err := net.InterfaceByName(cli.Interface)
 		if err != nil {
-			log.WithError(err).Fatalf("Unable to lookup %s", cli.Interface)
+			log.WithError(err).Fatalf("unable to lookup %s", cli.Interface)
 		}
 
 		bind_device(s, iface)
@@ -132,7 +140,8 @@ func main() {
 		Addr: [4]byte{dstIP[0], dstIP[1], dstIP[2], dstIP[3]},
 	}
 	for i := 0; i < cli.Count; i++ {
-		bufLen, err = syscall.SendmsgN(s, b, []byte{}, &addr, 0)
+		err = syscall.Sendto(s, b, 0, &addr)
+		// bufLen, err = syscall.SendmsgN(s, b, []byte{}, &addr, 0)
 		if err != nil {
 			log.WithError(err).Fatalf("sendto")
 		}

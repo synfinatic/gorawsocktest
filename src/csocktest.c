@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2023 Aaron Turner
  * Copyright (c) 1988, 1989, 1991, 1994, 1995, 1996, 1997, 1998, 1999, 2000
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -92,7 +93,6 @@ u_char	packet[512];		/* last inbound (icmp) packet */
 struct ip *outip;		/* last output (udp) packet */
 struct udphdr *outudp;		/* last output (udp) packet */
 union outdata *outdata;	/* last output (udp) packet */
-struct icmp *outicmp;		/* last output (icmp) packet */
 
 int s;				/* receive (icmp) socket file descriptor */
 int sndsock;			/* send (udp/icmp) socket file descriptor */
@@ -100,11 +100,8 @@ int sndsock;			/* send (udp/icmp) socket file descriptor */
 struct sockaddr whereto;	/* Who to try to reach */
 struct sockaddr wherefrom;	/* Who we are */
 int packlen;			/* total length of packet */
-int pmtu;			/* Path MTU Discovery (RFC1191) */
 
 static const char devnull[] = "/dev/null";
-
-
 
 extern int optind;
 extern int opterr;
@@ -132,7 +129,7 @@ u_short ident = 0x1234;
 u_int16_t srcPort = 5555; // -S
 u_int16_t  dstPort = 6666; // -D
 int bufSize = -1;
-int count = 3;
+int count = 1;
 char *device = NULL; // -i, optional
 char *payload = "this is my payload datas"; // -p
 
@@ -140,19 +137,15 @@ char *payload = "this is my payload datas"; // -p
 int
 main(int argc, char **argv)
 {
-	register int op, code, n;
-	register char *cp;
-	register const char *err;
-	register u_char *outp;
-	register u_int32_t *ap;
-	register struct sockaddr_in *from = (struct sockaddr_in *)&wherefrom;
-	register struct sockaddr_in *to = (struct sockaddr_in *)&whereto;
-	register struct hostinfo *hi;
+	char *cp;
+	const char *err;
+	u_char *outp;
+	u_int32_t *ap;
+	struct sockaddr_in *from = (struct sockaddr_in *)&wherefrom;
+	struct sockaddr_in *to = (struct sockaddr_in *)&whereto;
+	struct hostinfo *hi;
 	int on = 1;
-	register struct protoent *pe;
-	register int ttl, probe, i;
-	register int seq = 0;
-	register int lsrr = 0;
+	int i, op, n;
 	struct ifaddrlist *al;
 	char errbuf[132];
 
@@ -168,7 +161,7 @@ main(int argc, char **argv)
 	while ((op = getopt(argc, argv, "nzb:c:i:d:D:s:S:p:")) != EOF) {
 		switch (op) {
 		case 'b': // bufsize
-			bufSize = str2val(optarg, "bufsize", 1, (1 << 16) -1);
+			bufSize = str2val(optarg, "bufsize", 0, (1 << 16) -1);
 			break;
 
 		case 'c': // count
@@ -281,12 +274,14 @@ main(int argc, char **argv)
 	}
 
 #ifdef SO_SNDBUF
-	Fprintf(stderr, "we set SNDBUF\n");
-	if (bufSize < 0)
-		bufSize = packlen; 
-	if (setsockopt(sndsock, SOL_SOCKET, SO_SNDBUF, (char *)&bufSize, sizeof(bufSize)) < 0) {
-		Fprintf(stderr, "%s: SO_SNDBUF: %s\n", prog, strerror(errno));
-		exit(1);
+	if (bufSize != 0) {
+		if (bufSize < 0)
+			bufSize = packlen;
+		if (setsockopt(sndsock, SOL_SOCKET, SO_SNDBUF, (char *)&bufSize, sizeof(bufSize)) < 0) {
+			Fprintf(stderr, "%s: SO_SNDBUF: %s\n", prog, strerror(errno));
+			exit(1);
+		}
+		Fprintf(stderr, "we set SNDBUF to %d bytes\n", bufSize);
 	}
 #endif
 #ifdef IP_HDRINCL
