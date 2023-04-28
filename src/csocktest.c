@@ -212,6 +212,7 @@ main(int argc, char **argv)
 		exit(-1);
 	}
 
+	// convert our src & dst IPs
 	struct in_addr ipaddr;
 	inet_aton(dstIP, &ipaddr);
 	setsin(to, ipaddr.s_addr);
@@ -372,6 +373,7 @@ main(int argc, char **argv)
 	Fprintf(stderr, "%s:%d -> %s:%d\n", srcIP, srcPort, dstIP, dstPort);
 	for (int i = 0; i < count; i++)
 		send_probe();
+	// if we don't manually close, then we can't send _only_ 1 packet
 	close(sndsock);
 	exit(0);
 }
@@ -379,8 +381,8 @@ main(int argc, char **argv)
 void
 send_probe()
 {
-	register int cc;
-	register struct udpiphdr *ui, *oui;
+	int cc;
+	struct udpiphdr *ui, *oui;
 	struct ip tip;
 
 	outip->ip_ttl = ttl;
@@ -463,10 +465,10 @@ send_probe()
 u_short
 in_cksum(register u_short *addr, register int len)
 {
-	register int nleft = len;
-	register u_short *w = addr;
-	register u_short answer;
-	register int sum = 0;
+	int nleft = len;
+	u_short *w = addr;
+	u_short answer;
+	int sum = 0;
 
 	/*
 	 *  Our algorithm is simple, using a 32 bit accumulator (sum),
@@ -495,11 +497,11 @@ in_cksum(register u_short *addr, register int len)
 struct hostinfo *
 gethostinfo(register char *hostname)
 {
-	register int n;
-	register struct hostent *hp;
-	register struct hostinfo *hi;
-	register char **p;
-	register u_int32_t addr, *ap;
+	int n;
+	struct hostent *hp;
+	struct hostinfo *hi;
+	char **p;
+	u_int32_t addr, *ap;
 
 	if (strlen(hostname) > 64) {
 		Fprintf(stderr, "%s: hostname \"%.32s...\" is too long\n", prog, hostname);

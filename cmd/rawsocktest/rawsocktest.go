@@ -134,14 +134,17 @@ func main() {
 		bind_device(s, iface)
 	}
 
+	syscall.Setgid(syscall.Getgid())
+	syscall.Setuid(syscall.Getuid())
+
 	// send it!
 	addr := syscall.SockaddrInet4{
-		// Port: ???,
-		Addr: [4]byte{dstIP[0], dstIP[1], dstIP[2], dstIP[3]},
+		// Family: AF_INET is hard coded
+		Addr: [4]byte{dstIP.To4()[0], dstIP.To4()[1], dstIP.To4()[2], dstIP.To4()[3]},
 	}
 	for i := 0; i < cli.Count; i++ {
-		err = syscall.Sendto(s, b, 0, &addr)
-		// bufLen, err = syscall.SendmsgN(s, b, []byte{}, &addr, 0)
+		// err = syscall.Sendto(s, b, 0, &addr)
+		bufLen, err = syscall.SendmsgN(s, b, []byte{}, &addr, 0)
 		if err != nil {
 			log.WithError(err).Fatalf("sendto")
 		}
